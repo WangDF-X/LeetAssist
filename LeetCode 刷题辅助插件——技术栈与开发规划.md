@@ -1,0 +1,1719 @@
+# 一、产品定位
+
+这个插件不应该定位成“AI LeetCode”，而应该是一个：
+
+> **轻量级的 LeetCode 刷题辅助工具**
+
+核心目标只有四件事：
+
+1. **帮助思考**：画板
+2. **帮助控制做题节奏**：AI 智能计时
+3. **帮助理解代码运行过程**：代码 Trace / 模拟执行
+4. **需要帮助时提供 AI**：用户自行配置 API Key / Base URL / Model
+
+不做：
+
+- 用户账号系统
+- 云端同步
+- 社交功能
+- 排行榜
+- 复杂的刷题统计
+- 自建 AI 后端
+- 强制绑定某一家模型
+- 大量“AI 自动做题”功能
+
+整体应该保持：
+
+```text
+                    LeetCode
+                       │
+                       ▼
+              Chrome Extension
+                       │
+       ┌───────────────┼────────────────┐
+       │               │                │
+       ▼               ▼                ▼
+      画板           AI助手          代码Trace
+       │               │                │
+       └───────────────┼────────────────┘
+                       ▼
+                   智能计时
+                       │
+                       ▼
+                  本地数据存储
+```
+
+---
+
+# 二、最终功能范围
+
+## 1. 画板
+
+这是最简单、但实际使用价值很高的功能。
+
+支持：
+
+- 自由绘图
+- 箭头
+- 矩形
+- 圆形
+- 文本
+- 拖拽
+- 缩放
+- 撤销/重做
+- 清空
+- 自动保存
+- 每道题独立保存
+
+例如做链表：
+
+```text
+1 → 2 → 3 → 4
+
+       ↑
+      cur
+```
+
+做二叉树：
+
+```text
+        1
+       / \
+      2   3
+     / \
+    4   5
+```
+
+做滑动窗口：
+
+```text
+[1 2 | 3 4 5 | 6 7]
+
+    left      right
+```
+
+### 技术方案
+
+直接使用成熟的 Canvas/Whiteboard SDK，不自己实现。
+
+优先：
+
+```text
+React
+  ↓
+tldraw
+```
+
+tldraw 本身就是面向 React 的无限画布 SDK，提供自由绘制、几何图形、箭头、文本、拖拽、缩放等能力，因此非常适合你的需求。
+
+不需要使用 tldraw 的多人协作、AI Agent 等复杂能力，只使用它的基础 Editor。
+
+---
+
+# 三、AI 助手：核心原则是 BYOK
+
+你提出的这个方向是合理的。
+
+LeetCode 自己的 AI 功能存在会员限制，而你的插件可以采用：
+
+> **BYOK（Bring Your Own Key）**
+
+用户自己填写：
+
+```text
+Provider:
+OpenAI / Anthropic / Gemini / DeepSeek / Qwen / OpenRouter / Custom
+
+Base URL:
+https://xxx/v1
+
+API Key:
+sk-xxxxxxxx
+
+Model:
+xxx
+```
+
+甚至不需要预设 Provider。
+
+最理想的是：
+
+```text
+Provider
+    │
+    ├── Name
+    ├── Base URL
+    ├── API Key
+    └── Model
+```
+
+例如用户可以配置：
+
+```text
+OpenAI
+Base URL:
+https://api.openai.com/v1
+
+Model:
+gpt-5
+```
+
+也可以：
+
+```text
+DeepSeek
+Base URL:
+https://api.deepseek.com/v1
+
+Model:
+deepseek-chat
+```
+
+也可以：
+
+```text
+Custom
+Base URL:
+https://my-proxy.com/v1
+
+Model:
+xxx
+```
+
+因此你的 AI 层不要写死 OpenAI。
+
+建议抽象成：
+
+```typescript
+interface LLMProvider {
+    chat(
+        messages: Message[],
+        options?: ChatOptions
+    ): Promise<ChatResponse>
+}
+```
+
+然后：
+
+```text
+LLM Router
+   │
+   ├── OpenAI-compatible
+   ├── Anthropic
+   └── Gemini
+```
+
+实际上第一版甚至可以只实现：
+
+> **OpenAI-compatible API**
+
+因为大量国内模型和第三方中转服务都提供 OpenAI-compatible 接口。
+
+这样：
+
+```text
+OpenAI
+DeepSeek
+Qwen
+Moonshot
+OpenRouter
+各种代理
+本地 Ollama
+LiteLLM
+```
+
+只要接口兼容，就都可以使用。
+
+这也是我认为你这个项目相比很多“固定接 OpenAI API”的 LeetCode 插件更合理的地方。
+
+已有开源项目已经证明“Chrome Extension + 用户自己填写 API Key + 本地调用”是可行路线，例如 LeetCode AI Assistant、LeetPilot 等。尤其 LeetPilot 明确采用 BYOK 和本地数据方案。
+
+---
+
+# 四、AI 助手只做“轻量辅助”
+
+不要做：
+
+```text
+一键解题
+一键生成完整代码
+一键提交
+```
+
+而是提供几个按钮：
+
+```text
+┌────────────────────┐
+│ AI Assistant       │
+│                    │
+│ 💡 给我一点提示     │
+│ 🔍 分析我的思路     │
+│ 🐛 帮我找 Bug       │
+│ ⏱ 分析合理做题时间  │
+│ 💬 自由提问         │
+└────────────────────┘
+```
+
+上下文自动包含：
+
+```text
+题目
++
+约束
++
+用户当前代码
++
+语言
++
+用户的问题
+```
+
+例如：
+
+> “我这个双指针为什么会超时？”
+
+插件自动发送：
+
+```text
+Problem
++
+Constraints
++
+Current Code
++
+User Question
+```
+
+而不需要用户复制粘贴。
+
+---
+
+# 五、第三个功能：代码执行 Trace
+
+这是整个项目最值得投入的地方。
+
+但是第一版一定不要追求：
+
+> 支持所有语言 + 所有数据结构 + 完美可视化。
+
+建议：
+
+> **第一版只做 Python。**
+
+因为 Python 在浏览器里可以通过 Pyodide 直接执行，不需要后端。
+
+已有开源项目 LeetCode Solution Visualizer 已经验证了：
+
+```text
+浏览器
+ ↓
+Pyodide
+ ↓
+Python
+ ↓
+Trace
+ ↓
+变量 / 数组 / 链表 / 树 / Map / Set
+```
+
+并且已经能够做到逐步查看 Python LeetCode 代码运行状态。
+
+---
+
+# 六、代码 Trace 不要让 LLM 负责核心执行
+
+基本原则：
+
+> **能真实执行，就绝对不要让 LLM 模拟。**
+
+应该：
+
+```text
+Python Code
+     │
+     ▼
+Pyodide
+     │
+     ▼
+Instrumentation
+     │
+     ▼
+Execution Trace
+     │
+     ▼
+Visualizer
+```
+
+例如：
+
+```python
+for i, x in enumerate(nums):
+    if target - x in mp:
+        return [mp[target-x], i]
+
+    mp[x] = i
+```
+
+实际执行得到：
+
+```text
+Step 1
+i = 0
+x = 2
+mp = {}
+
+Step 2
+i = 1
+x = 7
+mp = {
+    2: 0
+}
+
+Step 3
+target - x = 2
+2 in mp = true
+
+return [0, 1]
+```
+
+然后 UI：
+
+```text
+Code
+
+1  for i, x in enumerate(nums):
+2      if target - x in mp:
+3          return [mp[target-x], i]
+4
+5      mp[x] = i
+```
+
+当前：
+
+```text
+>>> line 2
+```
+
+右侧：
+
+```text
+Variables
+
+i       1
+x       7
+target  9
+
+mp
+┌─────┐
+│ 2 0 │
+└─────┘
+```
+
+底部：
+
+```text
+◀   ▶   ▶▶   1 / 8
+```
+
+---
+
+# 七、LLM 在 Trace 功能中只作为“可选模式”
+
+你提出：
+
+> 对于难以 Trace 或成本较高的代码，可以使用 LLM 模拟。
+
+这个思路可以保留，但必须明确区分：
+
+### 模式 A：真实执行
+
+```text
+Real Execution
+```
+
+特点：
+
+- 准确
+- 可复现
+- 不消耗 API
+- 推荐
+
+### 模式 B：AI Simulation
+
+```text
+AI Simulation
+```
+
+特点：
+
+- 可以解释复杂代码
+- 不一定需要真正执行环境
+- 支持某些难以 instrumentation 的代码
+- 结果可能存在错误
+- 消耗 API
+
+UI 可以直接：
+
+```text
+Execution Mode
+
+● Real Execution
+○ AI Simulation
+```
+
+并明确提示：
+
+```text
+AI Simulation is generated by the configured LLM
+and may not reflect the exact runtime behavior.
+```
+
+这样不会把两种结果混在一起。
+
+---
+
+# 八、Python Trace 的第一版不要追求“所有变量变化”
+
+第一版只需要支持：
+
+```text
+当前代码行
+变量
+函数调用
+函数返回
+异常
+基本容器
+```
+
+例如：
+
+```text
+Step
+Line
+Event
+Locals
+Call Stack
+```
+
+统一 Trace 数据结构：
+
+```typescript
+interface TraceEvent {
+    step: number
+
+    line: number
+
+    event:
+        | "line"
+        | "call"
+        | "return"
+        | "exception"
+
+    locals: Record<string, unknown>
+
+    stack: StackFrame[]
+
+    output?: string
+}
+```
+
+之后 Visualizer 只负责：
+
+```text
+Trace
+ ↓
+Renderer
+```
+
+不要让 Visualizer 自己理解 Python。
+
+这样未来支持 Go 时：
+
+```text
+Go
+ ↓
+Go Trace Adapter
+ ↓
+统一 Trace
+```
+
+前端完全不用重写。
+
+---
+
+# 九、Go 是否应该第一版加入？
+
+如果考虑你自己主要使用 Go，我建议：
+
+> **先 Python，随后 Go。**
+
+原因不是 Go 不重要，而是 Python 的浏览器端执行路线明显简单。
+
+第一版：
+
+```text
+Python
+ ↓
+Pyodide
+ ↓
+Browser
+```
+
+第二版：
+
+```text
+Go
+ ↓
+WASM / 本地 Go Runner
+ ↓
+Trace
+```
+
+Go 的难点主要不是运行代码，而是：
+
+> 如何得到可靠、结构化、可用于前端展示的执行 Trace。
+
+所以不要因为自己主要使用 Go，就强行让 Go 成为第一语言。
+
+---
+
+# 十、智能计时是一个值得保留的小创新点
+
+这个功能不应该变成复杂的“学习系统”。
+
+它只需要：
+
+```text
+设置时间
+```
+
+变成：
+
+```text
+AI 建议时间
+```
+
+用户打开题目：
+
+```text
+Two Sum
+Easy
+```
+
+插件显示：
+
+```text
+AI Recommended Time
+
+15 min
+
+思考：5 min
+编码：7 min
+检查：3 min
+
+[开始计时]
+```
+
+换一道：
+
+```text
+LRU Cache
+Medium
+
+Recommended:
+35 min
+
+思考：12 min
+编码：18 min
+检查：5 min
+```
+
+困难题：
+
+```text
+Hard
+
+Recommended:
+60 min
+```
+
+---
+
+# 十一、AI 计时不应该每次都调用 API
+
+可以做成：
+
+```text
+题目
+ ↓
+本地基础信息
+ ↓
+Difficulty
+Tags
+Constraints
+Problem length
+ ↓
+本地估算
+```
+
+然后用户选择：
+
+```text
+[使用默认估算]
+
+[让 AI 分析]
+```
+
+AI 分析时给它：
+
+```text
+题目
+Difficulty
+Tags
+Constraints
+```
+
+要求返回：
+
+```json
+{
+    "total_minutes": 35,
+    "thinking_minutes": 12,
+    "coding_minutes": 18,
+    "checking_minutes": 5,
+    "reason": "需要设计哈希表和双向链表结构"
+}
+```
+
+这样 API 消耗非常低。
+
+---
+
+# 十二、可以给计时增加一个非常简单的“超时机制”
+
+例如：
+
+```text
+推荐时间：30 min
+
+00:00 ─────────────────── 30:00
+                           ↑
+                         建议结束
+```
+
+到了 30 分钟：
+
+```text
+Time's up.
+
+你可以：
+
+[继续 10 分钟]
+
+[查看 AI Hint]
+
+[结束并复盘]
+```
+
+但不要做复杂的学习统计。
+
+---
+
+# 十三、数据存储：完全本地
+
+你的判断是正确的。
+
+这个项目作为 Chrome Extension：
+
+> **第一版完全没有必要做后端。**
+
+数据全部存：
+
+```text
+Chrome Extension
+        │
+        ▼
+IndexedDB
+```
+
+推荐不要把大量数据放 `chrome.storage.local`。
+
+简单配置可以：
+
+```text
+chrome.storage.local
+```
+
+例如：
+
+```text
+API Provider
+API Key
+Base URL
+Model
+UI Settings
+```
+
+而题目数据、画板、Trace、AI 对话等：
+
+```text
+IndexedDB
+```
+
+---
+
+# 十四、数据结构可以非常简单
+
+```text
+ProblemSession
+
+problemId
+title
+url
+
+whiteboard
+timer
+code
+language
+
+aiMessages[]
+
+trace[]
+
+createdAt
+updatedAt
+```
+
+例如：
+
+```json
+{
+    "problemId": "two-sum",
+    "code": "...",
+    "language": "python",
+
+    "timer": {
+        "recommended": 15,
+        "elapsed": 742
+    },
+
+    "whiteboard": {
+        "..."
+    },
+
+    "aiMessages": [
+        {}
+    ],
+
+    "trace": []
+}
+```
+
+---
+
+# 十五、一定要做导入 / 导出
+
+因为你没有后端，所以：
+
+> **数据导入导出实际上是必须功能。**
+
+设置里面：
+
+```text
+Data
+
+[Export Data]
+
+[Import Data]
+
+[Clear Local Data]
+```
+
+导出：
+
+```text
+leetcode-companion-backup.json
+```
+
+里面可以包含：
+
+```text
+题目记录
+代码
+计时
+画板
+AI 对话
+Trace
+设置
+```
+
+不要导出 API Key。
+
+或者：
+
+```text
+Export:
+□ Include API settings
+```
+
+默认不勾选。
+
+---
+
+# 十六、API Key 的安全策略
+
+这是 BYOK 项目必须认真处理的地方。
+
+不要：
+
+```text
+API Key
+ ↓
+你的服务器
+ ↓
+LLM
+```
+
+而是：
+
+```text
+API Key
+ ↓
+Chrome Extension
+ ↓
+用户配置的 Base URL
+ ↓
+LLM
+```
+
+也就是说你完全不接触用户 API Key。
+
+存储：
+
+```text
+chrome.storage.local
+```
+
+UI：
+
+```text
+API Key
+***************
+```
+
+并明确说明：
+
+> API Key 仅保存在本地浏览器，不上传到插件开发者服务器。
+
+类似的本地 BYOK Chrome Extension 已经存在，可以参考其实现方式。
+
+---
+
+# 十七、最终技术栈
+
+## Extension
+
+```text
+Chrome Extension
+Manifest V3
+```
+
+Chrome Side Panel 很适合这个项目，因为它允许扩展 UI 常驻在网页旁边，而且 Side Panel 本身作为扩展页面可以访问 Chrome APIs。
+
+---
+
+## Frontend
+
+```text
+TypeScript
+React
+Vite
+Tailwind CSS
+```
+
+不要使用 Vue + React 混合。
+
+就：
+
+```text
+React + TypeScript
+```
+
+足够。
+
+---
+
+## UI
+
+```text
+shadcn/ui
+```
+
+只使用少量组件：
+
+```text
+Button
+Dialog
+Tabs
+Input
+Select
+Dropdown
+Tooltip
+```
+
+保持界面轻量。
+
+---
+
+## LeetCode 页面交互
+
+```text
+Content Script
+```
+
+负责：
+
+```text
+读取题目
+读取当前语言
+读取代码
+监听页面变化
+```
+
+不要过度依赖 LeetCode 内部 API。
+
+优先：
+
+```text
+DOM
++
+页面公开信息
+```
+
+因为内部接口可能变化。
+
+---
+
+## Side Panel
+
+```text
+React
+   ↓
+Chrome Side Panel
+```
+
+推荐布局：
+
+```text
+┌───────────────────────┐
+│ LeetCode Companion    │
+├───────────────────────┤
+│                       │
+│ [画板] [AI] [Trace]   │
+│                       │
+│                       │
+└───────────────────────┘
+```
+
+而不是在网页里塞一个巨大的浮窗。
+
+---
+
+## Whiteboard
+
+```text
+tldraw
+```
+
+---
+
+## Code Editor
+
+第一版甚至不需要自己提供编辑器。
+
+直接读取：
+
+```text
+LeetCode Monaco Editor
+```
+
+只有 Trace 调试页面可能需要额外的 Monaco Editor。
+
+---
+
+## Python Execution
+
+```text
+Pyodide
+```
+
+---
+
+## Trace
+
+```text
+Python
+ ↓
+Tracing / Instrumentation
+ ↓
+TraceEvent[]
+```
+
+---
+
+## AI
+
+第一版：
+
+```text
+OpenAI-compatible API
+```
+
+后续再加：
+
+```text
+Anthropic
+Gemini
+```
+
+---
+
+## Storage
+
+```text
+chrome.storage.local
++
+IndexedDB
+```
+
+---
+
+# 十八、项目目录
+
+建议从一开始就保持简单：
+
+```text
+leetcode-companion/
+│
+├── src/
+│   ├── background/
+│   │   └── service-worker.ts
+│   │
+│   ├── content/
+│   │   └── leetcode.ts
+│   │
+│   ├── sidepanel/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   │
+│   │   ├── whiteboard/
+│   │   ├── ai/
+│   │   ├── timer/
+│   │   └── trace/
+│   │
+│   ├── ai/
+│   │   ├── provider.ts
+│   │   ├── openai-compatible.ts
+│   │   └── prompt.ts
+│   │
+│   ├── trace/
+│   │   ├── types.ts
+│   │   ├── python/
+│   │   └── visualizer/
+│   │
+│   ├── storage/
+│   │   ├── settings.ts
+│   │   ├── database.ts
+│   │   └── backup.ts
+│   │
+│   └── types/
+│
+├── public/
+│
+├── manifest.json
+├── package.json
+└── vite.config.ts
+```
+
+不需要一开始搞 monorepo。
+
+---
+
+# 十九、开发阶段
+
+## Phase 1：插件骨架
+
+目标：
+
+```text
+Chrome Extension
++
+LeetCode Content Script
++
+Side Panel
+```
+
+实现：
+
+```text
+打开 LeetCode
+ ↓
+插件自动识别题目
+ ↓
+打开 Side Panel
+ ↓
+显示：
+Title
+Difficulty
+Tags
+URL
+```
+
+这一阶段先解决最重要的问题：
+
+> **LeetCode 页面到底怎么稳定获取题目和代码。**
+
+---
+
+# 二十、Phase 2：画板 + 本地数据
+
+实现：
+
+```text
+tldraw
++
+IndexedDB
+```
+
+完成：
+
+```text
+每道题一个画板
+自动保存
+刷新恢复
+切题恢复
+```
+
+同时做：
+
+```text
+Export
+Import
+```
+
+到这里已经是一个可以实际使用的小工具。
+
+---
+
+# 二十一、Phase 3：BYOK AI
+
+只实现：
+
+```text
+OpenAI-compatible API
+```
+
+设置：
+
+```text
+Base URL
+API Key
+Model
+```
+
+然后：
+
+```text
+AI Hint
+AI Explain
+AI Debug
+AI Chat
+```
+
+上下文自动：
+
+```text
+Problem
++
+Code
++
+Question
+```
+
+不要做几十个 AI 功能。
+
+---
+
+# 二十二、Phase 4：AI 智能计时
+
+实现：
+
+```text
+AI Analyze Problem
+       ↓
+Recommended Time
+       ↓
+Timer
+```
+
+返回：
+
+```text
+Total
+Thinking
+Coding
+Review
+```
+
+同时提供：
+
+```text
+[开始]
+```
+
+和：
+
+```text
+[调整时间]
+```
+
+用户永远可以覆盖 AI 建议。
+
+---
+
+# 二十三、Phase 5：Python Trace
+
+这是技术核心。
+
+第一阶段只做到：
+
+```text
+Run
+Step
+Pause
+Continue
+Restart
+```
+
+并显示：
+
+```text
+当前行
+局部变量
+调用栈
+输出
+异常
+```
+
+然后再加入：
+
+```text
+list
+dict
+set
+tuple
+```
+
+最后再加入：
+
+```text
+Tree
+LinkedList
+Heap
+Graph
+```
+
+不要反过来。
+
+---
+
+# 二十四、Phase 6：AI Simulation
+
+在 Trace 页面加入：
+
+```text
+Execution Mode
+
+● Real
+○ AI Simulation
+```
+
+AI Simulation：
+
+```text
+Problem
++
+Code
++
+Input
++
+LLM
+```
+
+生成：
+
+```text
+Step 1
+Step 2
+Step 3
+...
+```
+
+并且 UI 明确标记：
+
+```text
+AI Generated Trace
+```
+
+不要让用户误认为它是真实执行结果。
+
+---
+
+# 二十五、Phase 7：Go
+
+等 Python Trace 稳定后再做 Go。
+
+理想架构：
+
+```text
+Python Adapter
+       │
+       ▼
+   TraceEvent
+       ▲
+       │
+Go Adapter
+```
+
+前端只认识：
+
+```text
+TraceEvent
+```
+
+因此：
+
+```text
+Python
+Go
+C++
+```
+
+最终都可以接到同一个 Visualizer。
+
+---
+
+# 二十六、建议参考的开源项目
+
+### 1. LeetCode Solution Visualizer
+
+这是你**最值得重点研究的项目之一**。
+
+它已经实现：
+
+```text
+Python
++
+Pyodide
++
+Execution Trace
++
+Variables
++
+Arrays
++
+Linked List
++
+Tree
++
+Map
++
+Set
++
+Call Stack
+```
+
+你的 Trace 功能可以直接研究它的实现思路，而不是从零开始。
+
+---
+
+### 2. leetcode-visualizer
+
+另一个非常值得研究的项目。
+
+它已经做到：
+
+```text
+Python
++
+C++
++
+Python/Pyodide
++
+C++/clang++/LLDB
++
+Step-by-step
+```
+
+尤其值得研究：
+
+> 它如何设计统一的执行状态，以及 C++ 如何通过 LLDB 获取真实执行状态。
+
+---
+
+### 3. LeetCode AI Assistant
+
+可以重点研究：
+
+```text
+Chrome Extension
+Manifest V3
+React
+Side Panel
+Content Script
+AI Provider
+API Key
+Local Storage
+```
+
+这个项目的架构和你准备做的插件非常接近。
+
+---
+
+### 4. LeetPilot
+
+重点参考：
+
+```text
+BYOK
+Local-only
+AI Provider
+Chrome Extension
+```
+
+它的产品理念与你希望的：
+
+> 用户自己配置 API，不依赖你的后端
+
+比较接近。
+
+---
+
+### 5. LeetBuddy
+
+可以重点看看：
+
+```text
+AI
+Whiteboard
+Problem Context
+Persistent Session
+```
+
+但是不要照搬它的功能范围。
+
+你的目标应该比它更克制。
+
+---
+
+### 6. tldraw
+
+直接作为画板底层组件使用。
+
+不需要研究它的整个工程，只需要学习：
+
+```text
+<Tldraw />
+
+Editor API
+
+保存/恢复 Canvas State
+```
+
+---
+
+# 二十七、最终建议的 MVP
+
+如果你希望尽快做出第一个真正可用的版本，我建议 MVP 甚至只包含：
+
+```text
+┌──────────────────────────┐
+│ LeetCode Companion       │
+├──────────────────────────┤
+│                          │
+│ 题目：Two Sum            │
+│                          │
+│ ┌──────────────────────┐ │
+│ │                      │ │
+│ │      Whiteboard      │ │
+│ │                      │ │
+│ └──────────────────────┘ │
+│                          │
+│ ⏱ AI建议：15 min         │
+│ [开始计时]               │
+│                          │
+│ ─────────────────────── │
+│                          │
+│ 🤖 AI                    │
+│ [提示] [分析] [Debug]    │
+│                          │
+│ ─────────────────────── │
+│                          │
+│ ▶ Python Trace           │
+│                          │
+└──────────────────────────┘
+```
+
+其中：
+
+```text
+画板
+Timer
+AI
+```
+
+先全部做到稳定。
+
+然后单独攻克：
+
+```text
+Python Trace
+```
+
+这是整个项目最大的技术模块。
+
+---
+
+# 二十八、项目的核心原则
+
+整个项目最终保持三个原则：
+
+### 1. Local First
+
+```text
+用户数据
+    ↓
+本地
+
+API Key
+    ↓
+本地
+
+AI Request
+    ↓
+用户配置的 API
+```
+
+不需要你的服务器。
+
+### 2. BYOK
+
+不卖 AI。
+
+不提供自己的模型。
+
+用户自己选择：
+
+```text
+OpenAI
+Claude
+Gemini
+DeepSeek
+Qwen
+OpenRouter
+Ollama
+自定义 API
+```
+
+### 3. Small & Useful
+
+最终只解决：
+
+```text
+我不知道怎么想
+       ↓
+      画板
+
+我不知道做多久
+       ↓
+     AI Timer
+
+我不知道代码怎么跑
+       ↓
+     Trace
+
+我卡住了
+       ↓
+       AI
+```
+
+不要继续向：
+
+```text
+社交
+社区
+排行榜
+课程
+题库
+学习计划
+自动刷题
+Agent
+云端账户
+```
+
+扩张。
+
+这样反而更容易做成一个真正有人愿意安装和长期使用的插件。
+
+:::writing{variant="document" id="74163" title="建议的第一版技术栈清单"}
+
+| 模块 | 第一版方案 | 后续 |
+|---|---|---|
+| 浏览器扩展 | Chrome Extension MV3 | Firefox/Edge |
+| 前端 | React + TypeScript | 不需要更换 |
+| 构建 | Vite | 不需要更换 |
+| UI | Tailwind + shadcn/ui | 不需要更换 |
+| LeetCode 集成 | Content Script | 根据页面变化维护 |
+| Side Panel | Chrome Side Panel API | 不需要更换 |
+| 画板 | tldraw | 不需要更换 |
+| 本地配置 | chrome.storage.local | 不需要更换 |
+| 业务数据 | IndexedDB | 不需要更换 |
+| AI | OpenAI-compatible API | Anthropic/Gemini Adapter |
+| AI 配置 | Base URL + API Key + Model | Provider 管理 |
+| Python 执行 | Pyodide | 不需要更换 |
+| Python Trace | Instrumentation + TraceEvent | 扩展数据结构 |
+| Trace UI | React | 不需要更换 |
+| Go Trace | 后续单独实现 | Go Adapter |
+| 数据备份 | JSON Import/Export | 不需要后端 |
+| 后端 | **没有** | 暂时没有 |
+
+推荐开发顺序：
+
+```text
+① Chrome Extension 骨架
+        ↓
+② LeetCode 题目/代码获取
+        ↓
+③ Side Panel
+        ↓
+④ tldraw 画板
+        ↓
+⑤ IndexedDB 保存
+        ↓
+⑥ BYOK AI
+        ↓
+⑦ AI 智能计时
+        ↓
+⑧ Python + Pyodide
+        ↓
+⑨ Python Trace
+        ↓
+⑩ AI Simulation
+        ↓
+⑪ Go Trace
+```
+
+其中 **①～⑦属于工程实现，⑧～⑪才是主要技术难点**。
+
+因此最合理的开发策略不是一开始就研究 Trace，而是先在一周左右把插件的基础框架、画板、BYOK AI 和本地存储跑通，然后把主要精力集中到 Python Trace 上。
+:::
