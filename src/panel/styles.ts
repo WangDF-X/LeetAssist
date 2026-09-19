@@ -14,24 +14,29 @@ export const PANEL_CSS = `
 .la-logo {
   pointer-events: auto;
   position: fixed;
-  right: 24px;
-  bottom: 32px;
-  width: 52px;
-  height: 52px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   border-radius: 50%;
   border: none;
-  cursor: pointer;
-  background: linear-gradient(135deg, #22a7f0, #7b2ff7);
-  color: #fff;
-  font-weight: 700;
-  font-size: 18px;
+  cursor: grab;
+  background: transparent;
+  overflow: hidden;
   box-shadow: 0 6px 18px rgba(60, 60, 120, 0.35);
   animation: la-float 3s ease-in-out infinite;
   transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  user-select: none;
 }
 .la-logo:hover { transform: scale(1.08) rotate(6deg); }
-.la-logo:active { transform: scale(0.94); }
+.la-logo:active { cursor: grabbing; transform: scale(0.94); }
 .la-logo[data-hidden="true"] { display: none; }
+.la-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
 @keyframes la-float {
   0%, 100% { translate: 0 0; }
   50% { translate: 0 -3px; }
@@ -112,6 +117,14 @@ export const PANEL_CSS = `
 }
 .la-tool-btn:hover { background: #dde3ea; }
 .la-tool-btn[data-active="true"] { background: #22a7f0; color: #fff; }
+.la-collapse {
+  color: #22a7f0;
+  font-size: 15px;
+  line-height: 1;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #d8dce3;
+  border-radius: 0 0 6px 6px;
+}
 
 .la-col-agent {
   flex: 1;

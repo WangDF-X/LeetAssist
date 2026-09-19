@@ -7,10 +7,21 @@ interface Box {
   w: number;
   h: number;
 }
+interface Point {
+  x: number;
+  y: number;
+}
 
 const MIN_W = 720;
 const MIN_H = 480;
 const TOOLBAR_W = 46;
+const LOGO_SIZE = 40;
+const LOGO_URL = chrome.runtime.getURL("assets/logo.png");
+const DRAG_THRESHOLD = 6;
+
+function clamp(n: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, n));
+}
 
 function defaultBox(): Box {
   const w = Math.min(1100, window.innerWidth - 80);
@@ -24,11 +35,25 @@ function defaultBox(): Box {
 }
 
 function clampBox(b: Box): Box {
-  const w = Math.min(Math.max(b.w, MIN_W), window.innerWidth - 16);
-  const h = Math.min(Math.max(b.h, MIN_H), window.innerHeight - 16);
-  const x = Math.min(Math.max(b.x, 8), window.innerWidth - w - 8);
-  const y = Math.min(Math.max(b.y, 8), window.innerHeight - h - 8);
+  const w = clamp(b.w, MIN_W, window.innerWidth - 16);
+  const h = clamp(b.h, MIN_H, window.innerHeight - 16);
+  const x = clamp(b.x, 8, window.innerWidth - w - 8);
+  const y = clamp(b.y, 8, window.innerHeight - h - 8);
   return { x, y, w, h };
+}
+
+function defaultLogoPos(): Point {
+  return {
+    x: window.innerWidth - LOGO_SIZE - 24,
+    y: window.innerHeight - LOGO_SIZE - 32,
+  };
+}
+
+function clampLogo(p: Point): Point {
+  return {
+    x: clamp(p.x, 0, window.innerWidth - LOGO_SIZE),
+    y: clamp(p.y, 0, window.innerHeight - LOGO_SIZE),
+  };
 }
 
 function applyEdge(b: Box, edge: string, dx: number, dy: number): Box {
@@ -46,10 +71,10 @@ function applyEdge(b: Box, edge: string, dx: number, dy: number): Box {
   return { x, y, w, h };
 }
 
-// 弹簧缓动：优先用 CSS linear() 弹簧曲线，不支持时回退过冲贝塞尔
+// 弹簧缓动：优先 CSS linear() 过冲弹簧曲线，不支持时回退过冲贝塞尔
 function springEasing(): string {
   const curve =
-    "linear(0, 0.008, 0.031 2.1%, 0.129 4.8%, 0.552 12.2%, 0.706 15.5%, 0.801 18.9%, 0.865 22.2%, 0.907 25.6%, 0.931 29%, 0.944 32.4%, 0.952 36.2%, 0.957 40.5%, 0.958 46.6%, 0.956 55.3%, 0.957 69.2%, 1)";
+    "linear(0, 0.009, 0.035, 0.153 6.9%, 0.355 12.6%, 0.6 18.4%, 0.782 23.6%, 0.915 28.4%, 0.997 32.9%, 1.03 37.4%, 1.03 42.6%, 1.01 49.4%, 0.995 57.2%, 0.992 79%, 1)";
   return CSS.supports("animation-timing-function", "linear(0, 1)")
     ? curve
     : "cubic-bezier(0.34, 1.56, 0.64, 1)";
@@ -68,19 +93,24 @@ export function PanelApp() {
   const [box, setBox] = useState<Box>(defaultBox);
   const [ratio, setRatio] = useState(0.58);
   const [popover, setPopover] = useState<ToolId | null>(null);
+  const [logoPos, setLogoPos] = useState<Point>(defaultLogoPos);
   const panelRef = useRef<HTMLDivElement>(null);
+  const logoRef = useRef<HTMLButtonElement>(null);
 
   const boxRef = useRef(box);
   boxRef.current = box;
   const ratioRef = useRef(ratio);
   ratioRef.current = ratio;
+  const logoPosRef = useRef(logoPos);
+  logoPosRef.current = logoPos;
 
   const meta = getProblemMetaStub();
 
   useEffect(() => {
-    chrome.storage.local.get(["panelBox", "panelRatio"], (saved) => {
+    chrome.storage.local.get(["panelBox", "panelRatio", "logoPos"], (saved) => {
       if (saved.panelBox) setBox(clampBox(saved.panelBox as Box));
       if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
+      if (saved.logoPos) setLogoPos(clampLogo(saved.logoPos as Point));
     });
   }, []);
 
@@ -88,34 +118,82 @@ export function PanelApp() {
     chrome.storage.local.set({
       panelBox: boxRef.current,
       panelRatio: ratioRef.current,
+      logoPos: logoPosRef.current,
     });
   }, []);
 
-  const toggle = useCallback(() => {
+  // 以 logo 为锚点设置面板的 transform-origin，展开/收起都从 logo 位置弹
+  const setOriginToLogo = useCallback((el: HTMLElement) => {
+    const cx = logoPosRef.current.x + LOGO_SIZE / 2 - boxRef.current.x;
+    const cy = logoPosRef.current.y + LOGO_SIZE / 2 - boxRef.current.y;
+    el.style.transformOrigin = `${clamp(cx, 0, boxRef.current.w)}px ${clamp(
+      cy,
+      0,
+      boxRef.current.h,
+    )}px`;
+  }, []);
+
+  // 打开动画：DOM 就绪后以弹簧曲线从 logo 锚点弹出
+  useEffect(() => {
+    if (!open) return;
+    const el = panelRef.current;
+    if (!el) return;
+    setOriginToLogo(el);
+    el.animate(
+      [
+        { transform: "scale(0.55)", opacity: 0 },
+        { transform: "scale(1)", opacity: 1 },
+      ],
+      { duration: 460, easing: springEasing(), fill: "both" },
+    );
+  }, [open, setOriginToLogo]);
+
+  const closePanel = useCallback(() => {
     setPopover(null);
-    if (!open) {
-      setOpen(true);
-      requestAnimationFrame(() => {
-        panelRef.current?.animate(
-          [
-            { transform: "scale(0.6)", opacity: 0 },
-            { transform: "scale(1)", opacity: 1 },
-          ],
-          { duration: 420, easing: springEasing() },
-        );
-      });
-    } else {
-      const anim = panelRef.current?.animate(
-        [
-          { transform: "scale(1)", opacity: 1 },
-          { transform: "scale(0.6)", opacity: 0 },
-        ],
-        { duration: 320, easing: "cubic-bezier(0.4, 0, 0.7, 1)" },
-      );
-      if (anim) anim.onfinish = () => setOpen(false);
-      else setOpen(false);
+    const el = panelRef.current;
+    if (!el) {
+      setOpen(false);
+      return;
     }
-  }, [open]);
+    setOriginToLogo(el);
+    const anim = el.animate(
+      [
+        { transform: "scale(1)", opacity: 1 },
+        { transform: "scale(0.55)", opacity: 0 },
+      ],
+      { duration: 340, easing: "cubic-bezier(0.5, 0, 0.75, 0.5)", fill: "both" },
+    );
+    anim.onfinish = () => setOpen(false);
+  }, [setOriginToLogo]);
+
+  // logo：6px 阈值区分"点击展开"与"拖动换位"，拖动结束持久化位置
+  const onLogoPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const logoEl = logoRef.current;
+    if (logoEl) logoEl.style.animation = "none";
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const orig = { ...logoPosRef.current };
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) moved = true;
+      if (moved) setLogoPos(clampLogo({ x: orig.x + dx, y: orig.y + dy }));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (moved) {
+        persist();
+      } else {
+        if (logoEl) logoEl.style.animation = "";
+        setOpen(true);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   const startResize = (edge: string) => (e: React.PointerEvent) => {
     e.preventDefault();
@@ -124,7 +202,9 @@ export function PanelApp() {
     const startY = e.clientY;
     const start = { ...boxRef.current };
     const move = (ev: PointerEvent) => {
-      setBox(clampBox(applyEdge(start, edge, ev.clientX - startX, ev.clientY - startY)));
+      setBox(
+        clampBox(applyEdge(start, edge, ev.clientX - startX, ev.clientY - startY)),
+      );
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -141,11 +221,7 @@ export function PanelApp() {
     const startRatio = ratioRef.current;
     const panelW = boxRef.current.w;
     const move = (ev: PointerEvent) => {
-      const next = Math.min(
-        0.7,
-        Math.max(0.3, startRatio + (ev.clientX - startX) / panelW),
-      );
-      setRatio(next);
+      setRatio(clamp(startRatio + (ev.clientX - startX) / panelW, 0.3, 0.7));
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -163,10 +239,12 @@ export function PanelApp() {
       <button
         className="la-logo"
         data-hidden={open}
-        onClick={toggle}
-        title="LeetAssist"
+        ref={logoRef}
+        style={{ left: logoPos.x, top: logoPos.y }}
+        onPointerDown={onLogoPointerDown}
+        title="LeetAssist（可拖动换位，点击展开）"
       >
-        LA
+        <img src={LOGO_URL} alt="LeetAssist" draggable={false} />
       </button>
       <div
         ref={panelRef}
@@ -182,6 +260,14 @@ export function PanelApp() {
           </div>
         </div>
         <div className="la-toolbar" onPointerDown={startRatioDrag}>
+          <button
+            className="la-tool-btn la-collapse"
+            title="收起为悬浮图标"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={closePanel}
+          >
+            ⌄
+          </button>
           {TOOLS.map((t) => (
             <button
               key={t.id}
