@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getProblemMetaStub } from "./problemMeta";
+import {
+  nextThemeMode,
+  resolveTheme,
+  THEME_MODE_LABEL,
+  type ThemeMode,
+} from "./theme";
 
 interface Box {
   x: number;
@@ -135,6 +141,11 @@ export function PanelApp() {
   const [logoPos, setLogoPos] = useState<Point>(defaultLogoPos);
   // 单栏收起/展开的宽度过渡开关（仅在切换瞬间开启，避免拖拽比例时被过渡拖慢）
   const [colAnim, setColAnim] = useState(false);
+  // 主题：浅色 / 深色 / 跟随系统（默认跟随系统，持久化 themeMode）
+  const [themeMode, setThemeMode] = useState<ThemeMode>("system");
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
   const panelRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLButtonElement>(null);
   const colAnimTimer = useRef<number | undefined>(undefined);
@@ -152,15 +163,29 @@ export function PanelApp() {
 
   useEffect(() => {
     chrome.storage.local.get(
-      ["panelBox", "panelRatio", "logoY", "collapsed"],
+      ["panelBox", "panelRatio", "logoY", "collapsed", "themeMode"],
       (saved) => {
         if (saved.panelBox) setBox(clampBox(saved.panelBox as Box));
         if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
         if (typeof saved.logoY === "number")
           setLogoPos({ x: logoSnapX(), y: clampLogoY(saved.logoY) });
         if (saved.collapsed) setCollapsed(saved.collapsed as CollapsedState);
+        if (
+          saved.themeMode === "light" ||
+          saved.themeMode === "dark" ||
+          saved.themeMode === "system"
+        )
+          setThemeMode(saved.themeMode);
       },
     );
+  }, []);
+
+  // 跟随系统模式：监听系统主题变化
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
   }, []);
 
   // 视口变化（如打开 DevTools、调整窗口）时：面板重新钳入视口，logo 重新吸附右边缘
@@ -370,8 +395,16 @@ export function PanelApp() {
       : Math.max(200, Math.round(contentW * ratio));
   const agentWidth = contentW - wbWidth;
 
+  const resolvedTheme = resolveTheme(themeMode, systemDark);
+  // 循环切换 浅色 → 深色 → 跟随系统，并持久化
+  const cycleTheme = () => {
+    const next = nextThemeMode(themeMode);
+    setThemeMode(next);
+    chrome.storage.local.set({ themeMode: next });
+  };
+
   return (
-    <>
+    <div className="la-root" data-theme={resolvedTheme}>
       <button
         className="la-logo"
         data-hidden={open}
@@ -429,6 +462,63 @@ export function PanelApp() {
               {t.label}
             </button>
           ))}
+          <button
+            className="la-tool-btn la-theme-btn"
+            title={`主题：${THEME_MODE_LABEL[themeMode]}（点击切换）`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={cycleTheme}
+          >
+            {themeMode === "light" && (
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <path
+                  d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            )}
+            {themeMode === "dark" && (
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path
+                  d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+            {themeMode === "system" && (
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <rect
+                  x="3"
+                  y="4"
+                  width="18"
+                  height="12"
+                  rx="2"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <path
+                  d="M8 20h8M12 16v4"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            )}
+          </button>
         </div>
         <div
           className="la-col-agent"
@@ -489,6 +579,6 @@ export function PanelApp() {
           {TOOLS.find((t) => t.id === popover)?.label} popover（占位，后续模块实现）
         </div>
       )}
-    </>
+    </div>
   );
 }

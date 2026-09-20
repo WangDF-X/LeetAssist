@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "build": "npm run check:theme && vite build",
+    "typecheck": "tsc --noEmit",
+    "check:theme": "node scripts/check-theme.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",
