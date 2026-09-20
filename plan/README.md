@@ -27,6 +27,10 @@ Draft → Confirmed → In Progress → Done
 - **In Progress**：已经开出对应 feature 分支，正在开发。
 - **Done**：已合并进 `main`，功能上线。
 
+## 跨模块硬规则
+
+- **主题/颜色**：任何模块新增 UI 只允许使用 `--la-*` 设计令牌（CSS 变量），禁止硬编码颜色；规则与色板见 `01-extension-shell/spec.md` §3.7，`npm run check:theme` 构建前强制检查。
+
 ## 新增一个模块
 
 1. 建一个新目录，例如 `plan/07-xxx/`。
