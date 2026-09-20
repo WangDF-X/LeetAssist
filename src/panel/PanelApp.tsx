@@ -16,6 +16,8 @@ const MIN_W = 720;
 const MIN_H = 480;
 const TOOLBAR_W = 46;
 const LOGO_SIZE = 40;
+const LOGO_MARGIN_RIGHT = 24;
+const LOGO_MARGIN_BOTTOM = 32;
 const LOGO_URL = chrome.runtime.getURL("assets/logo.png");
 const DRAG_THRESHOLD = 6;
 
@@ -42,31 +44,48 @@ function clampBox(b: Box): Box {
   return { x, y, w, h };
 }
 
+// logo 只允许停靠在视口右边缘：x 永远由视口推导（吸附右侧），只持久化 y
+function logoSnapX(): number {
+  return Math.max(0, window.innerWidth - LOGO_SIZE - LOGO_MARGIN_RIGHT);
+}
+
+function clampLogoY(y: number): number {
+  return clamp(y, 0, window.innerHeight - LOGO_SIZE);
+}
+
 function defaultLogoPos(): Point {
   return {
-    x: window.innerWidth - LOGO_SIZE - 24,
-    y: window.innerHeight - LOGO_SIZE - 32,
+    x: logoSnapX(),
+    y: Math.max(0, window.innerHeight - LOGO_SIZE - LOGO_MARGIN_BOTTOM),
   };
 }
 
 function clampLogo(p: Point): Point {
   return {
     x: clamp(p.x, 0, window.innerWidth - LOGO_SIZE),
-    y: clamp(p.y, 0, window.innerHeight - LOGO_SIZE),
+    y: clampLogoY(p.y),
   };
 }
 
+// 先按边钳制尺寸（最小尺寸 + 不越出视口），再反推位置：
+// 达到最小尺寸/视口边界后对侧边缘钉死，面板不会被"推着走"
 function applyEdge(b: Box, edge: string, dx: number, dy: number): Box {
   let { x, y, w, h } = b;
-  if (edge.includes("e")) w = b.w + dx;
-  if (edge.includes("s")) h = b.h + dy;
+  if (edge.includes("e")) {
+    w = clamp(b.w + dx, MIN_W, Math.max(MIN_W, window.innerWidth - 8 - b.x));
+  }
+  if (edge.includes("s")) {
+    h = clamp(b.h + dy, MIN_H, Math.max(MIN_H, window.innerHeight - 8 - b.y));
+  }
   if (edge.includes("w")) {
-    x = b.x + dx;
-    w = b.w - dx;
+    const newW = clamp(b.w - dx, MIN_W, Math.max(MIN_W, b.x + b.w - 8));
+    x = b.x + (b.w - newW);
+    w = newW;
   }
   if (edge.includes("n")) {
-    y = b.y + dy;
-    h = b.h - dy;
+    const newH = clamp(b.h - dy, MIN_H, Math.max(MIN_H, b.y + b.h - 8));
+    y = b.y + (b.h - newH);
+    h = newH;
   }
   return { x, y, w, h };
 }
@@ -107,18 +126,29 @@ export function PanelApp() {
   const meta = getProblemMetaStub();
 
   useEffect(() => {
-    chrome.storage.local.get(["panelBox", "panelRatio", "logoPos"], (saved) => {
+    chrome.storage.local.get(["panelBox", "panelRatio", "logoY"], (saved) => {
       if (saved.panelBox) setBox(clampBox(saved.panelBox as Box));
       if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
-      if (saved.logoPos) setLogoPos(clampLogo(saved.logoPos as Point));
+      if (typeof saved.logoY === "number")
+        setLogoPos({ x: logoSnapX(), y: clampLogoY(saved.logoY) });
     });
+  }, []);
+
+  // 视口变化（如打开 DevTools、调整窗口）时：面板重新钳入视口，logo 重新吸附右边缘
+  useEffect(() => {
+    const onViewportResize = () => {
+      setBox((b) => clampBox(b));
+      setLogoPos((p) => ({ x: logoSnapX(), y: clampLogoY(p.y) }));
+    };
+    window.addEventListener("resize", onViewportResize);
+    return () => window.removeEventListener("resize", onViewportResize);
   }, []);
 
   const persist = useCallback(() => {
     chrome.storage.local.set({
       panelBox: boxRef.current,
       panelRatio: ratioRef.current,
-      logoPos: logoPosRef.current,
+      logoY: logoPosRef.current.y,
     });
   }, []);
 
@@ -166,11 +196,14 @@ export function PanelApp() {
     anim.onfinish = () => setOpen(false);
   }, [setOriginToLogo]);
 
-  // logo：6px 阈值区分"点击展开"与"拖动换位"，拖动结束持久化位置
+  // logo：6px 阈值区分"点击展开"与"拖动换位"；拖动只允许改变纵向位置，松手吸附回右边缘
   const onLogoPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     const logoEl = logoRef.current;
-    if (logoEl) logoEl.style.animation = "none";
+    if (logoEl) {
+      logoEl.style.animation = "none";
+      logoEl.style.transition = "none"; // 拖动中跟手，不做过渡
+    }
     const startX = e.clientX;
     const startY = e.clientY;
     const orig = { ...logoPosRef.current };
@@ -185,11 +218,43 @@ export function PanelApp() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       if (moved) {
+        // 先恢复过渡再吸附，让"滑回右边缘"有动画
+        if (logoEl) logoEl.style.transition = "";
+        setLogoPos((p) => ({ x: logoSnapX(), y: clampLogoY(p.y) }));
         persist();
       } else {
-        if (logoEl) logoEl.style.animation = "";
+        if (logoEl) {
+          logoEl.style.animation = "";
+          logoEl.style.transition = "";
+        }
         setOpen(true);
       }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // 面板拖拽移动：左栏顶部工具行 / 右栏标题栏作为拖拽区
+  const startMove = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button")) return; // 栏内按钮不触发移动
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const start = { ...boxRef.current };
+    const move = (ev: PointerEvent) => {
+      setBox(
+        clampBox({
+          ...start,
+          x: start.x + ev.clientX - startX,
+          y: start.y + ev.clientY - startY,
+        }),
+      );
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      persist();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -253,7 +318,9 @@ export function PanelApp() {
         style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
       >
         <div className="la-col-whiteboard" style={{ flex: `0 0 ${wbWidth}px` }}>
-          <div className="la-wb-topbar">画笔 / 写字等工具（Phase 2）</div>
+          <div className="la-wb-topbar la-drag" onPointerDown={startMove}>
+            画笔 / 写字等工具（Phase 2）
+          </div>
           <div className="la-wb-body">
             <div className="la-wb-shapes">常用图形</div>
             <div className="la-wb-canvas">画板区域（Phase 2 引入 Konva）</div>
@@ -281,7 +348,7 @@ export function PanelApp() {
           ))}
         </div>
         <div className="la-col-agent">
-          <div className="la-agent-head">
+          <div className="la-agent-head la-drag" onPointerDown={startMove}>
             <span>
               {meta.title} · {meta.difficulty}
             </span>

@@ -24,7 +24,10 @@ export const PANEL_CSS = `
   overflow: hidden;
   box-shadow: 0 6px 18px rgba(60, 60, 120, 0.35);
   animation: la-float 3s ease-in-out infinite;
-  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* transform 回弹 + left 过渡（拖动松手后吸附右边缘） */
+  transition:
+    transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+    left 0.18s ease-out;
   user-select: none;
 }
 .la-logo:hover { transform: scale(1.08) rotate(6deg); }
@@ -177,6 +180,9 @@ export const PANEL_CSS = `
   font-size: 12px;
   color: #4b5563;
 }
+
+/* 面板拖拽区（左栏顶部工具行 / 右栏标题栏） */
+.la-drag { cursor: move; user-select: none; }
 
 .la-handle { position: absolute; }
 .la-handle-n { top: 0; left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
