@@ -11,9 +11,15 @@ interface Point {
   x: number;
   y: number;
 }
+interface CollapsedState {
+  wb: boolean;
+  agent: boolean;
+}
 
 const MIN_W = 720;
+const MIN_W_SINGLE = 480; // 单栏可见时的面板最小宽度
 const MIN_H = 480;
+const EAR_W = 20; // 单栏收起/展开"耳朵"按钮宽度
 const TOOLBAR_W = 46;
 const LOGO_SIZE = 40;
 const LOGO_MARGIN_RIGHT = 24;
@@ -36,8 +42,12 @@ function defaultBox(): Box {
   };
 }
 
-function clampBox(b: Box): Box {
-  const w = clamp(b.w, MIN_W, window.innerWidth - 16);
+function effMinW(c: CollapsedState): number {
+  return c.wb || c.agent ? MIN_W_SINGLE : MIN_W;
+}
+
+function clampBox(b: Box, minW: number = MIN_W): Box {
+  const w = clamp(b.w, minW, window.innerWidth - 16);
   const h = clamp(b.h, MIN_H, window.innerHeight - 16);
   const x = clamp(b.x, 8, window.innerWidth - w - 8);
   const y = clamp(b.y, 8, window.innerHeight - h - 8);
@@ -69,16 +79,22 @@ function clampLogo(p: Point): Point {
 
 // 先按边钳制尺寸（最小尺寸 + 不越出视口），再反推位置：
 // 达到最小尺寸/视口边界后对侧边缘钉死，面板不会被"推着走"
-function applyEdge(b: Box, edge: string, dx: number, dy: number): Box {
+function applyEdge(
+  b: Box,
+  edge: string,
+  dx: number,
+  dy: number,
+  minW: number = MIN_W,
+): Box {
   let { x, y, w, h } = b;
   if (edge.includes("e")) {
-    w = clamp(b.w + dx, MIN_W, Math.max(MIN_W, window.innerWidth - 8 - b.x));
+    w = clamp(b.w + dx, minW, Math.max(minW, window.innerWidth - 8 - b.x));
   }
   if (edge.includes("s")) {
     h = clamp(b.h + dy, MIN_H, Math.max(MIN_H, window.innerHeight - 8 - b.y));
   }
   if (edge.includes("w")) {
-    const newW = clamp(b.w - dx, MIN_W, Math.max(MIN_W, b.x + b.w - 8));
+    const newW = clamp(b.w - dx, minW, Math.max(minW, b.x + b.w - 8));
     x = b.x + (b.w - newW);
     w = newW;
   }
@@ -111,33 +127,46 @@ export function PanelApp() {
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState<Box>(defaultBox);
   const [ratio, setRatio] = useState(0.58);
+  const [collapsed, setCollapsed] = useState<CollapsedState>({
+    wb: false,
+    agent: false,
+  });
   const [popover, setPopover] = useState<ToolId | null>(null);
   const [logoPos, setLogoPos] = useState<Point>(defaultLogoPos);
+  // 单栏收起/展开的宽度过渡开关（仅在切换瞬间开启，避免拖拽比例时被过渡拖慢）
+  const [colAnim, setColAnim] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLButtonElement>(null);
+  const colAnimTimer = useRef<number | undefined>(undefined);
 
   const boxRef = useRef(box);
   boxRef.current = box;
   const ratioRef = useRef(ratio);
   ratioRef.current = ratio;
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
   const logoPosRef = useRef(logoPos);
   logoPosRef.current = logoPos;
 
   const meta = getProblemMetaStub();
 
   useEffect(() => {
-    chrome.storage.local.get(["panelBox", "panelRatio", "logoY"], (saved) => {
-      if (saved.panelBox) setBox(clampBox(saved.panelBox as Box));
-      if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
-      if (typeof saved.logoY === "number")
-        setLogoPos({ x: logoSnapX(), y: clampLogoY(saved.logoY) });
-    });
+    chrome.storage.local.get(
+      ["panelBox", "panelRatio", "logoY", "collapsed"],
+      (saved) => {
+        if (saved.panelBox) setBox(clampBox(saved.panelBox as Box));
+        if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
+        if (typeof saved.logoY === "number")
+          setLogoPos({ x: logoSnapX(), y: clampLogoY(saved.logoY) });
+        if (saved.collapsed) setCollapsed(saved.collapsed as CollapsedState);
+      },
+    );
   }, []);
 
   // 视口变化（如打开 DevTools、调整窗口）时：面板重新钳入视口，logo 重新吸附右边缘
   useEffect(() => {
     const onViewportResize = () => {
-      setBox((b) => clampBox(b));
+      setBox((b) => clampBox(b, effMinW(collapsedRef.current)));
       setLogoPos((p) => ({ x: logoSnapX(), y: clampLogoY(p.y) }));
     };
     window.addEventListener("resize", onViewportResize);
@@ -149,6 +178,7 @@ export function PanelApp() {
       panelBox: boxRef.current,
       panelRatio: ratioRef.current,
       logoY: logoPosRef.current.y,
+      collapsed: collapsedRef.current,
     });
   }, []);
 
@@ -178,8 +208,18 @@ export function PanelApp() {
     );
   }, [open, setOriginToLogo]);
 
+  // 关闭面板前的数据保存钩子。⚠️ 后续模块实现时必须在此挂接保存逻辑：
+  // TODO(spec 03-whiteboard): 保存当前题目的画板内容到 IndexedDB（切题/关闭时）
+  // TODO(spec 04-ai-assistant): 保存当前题目的对话记录（一题多对话）
+  // TODO(spec 05-timer): 保存计时器运行状态
+  const persistOnClose = useCallback(() => {
+    persist(); // 布局状态：panelBox / panelRatio / logoY / collapsed
+    // 业务数据保存占位：目前各模块未实现，暂无额外数据需要保存
+  }, [persist]);
+
   const closePanel = useCallback(() => {
     setPopover(null);
+    persistOnClose();
     const el = panelRef.current;
     if (!el) {
       setOpen(false);
@@ -194,7 +234,22 @@ export function PanelApp() {
       { duration: 340, easing: "cubic-bezier(0.5, 0, 0.75, 0.5)", fill: "both" },
     );
     anim.onfinish = () => setOpen(false);
-  }, [setOriginToLogo]);
+  }, [setOriginToLogo, persistOnClose]);
+
+  // 单栏收起/展开：收起一侧另一侧占满（面板总宽不变）；二者都收起 = 直接收回 logo，下次打开恢复双栏展开
+  const toggleCol = (side: "wb" | "agent") => {
+    const cur = collapsedRef.current;
+    const next = { ...cur, [side]: !cur[side] };
+    const both = next.wb && next.agent;
+    const applied: CollapsedState = both ? { wb: false, agent: false } : next;
+    collapsedRef.current = applied;
+    setCollapsed(applied);
+    persist();
+    setColAnim(true);
+    window.clearTimeout(colAnimTimer.current);
+    colAnimTimer.current = window.setTimeout(() => setColAnim(false), 320);
+    if (both) closePanel();
+  };
 
   // logo：6px 阈值区分"点击展开"与"拖动换位"；拖动只允许改变纵向位置，松手吸附回右边缘
   const onLogoPointerDown = (e: React.PointerEvent) => {
@@ -242,13 +297,17 @@ export function PanelApp() {
     const startX = e.clientX;
     const startY = e.clientY;
     const start = { ...boxRef.current };
+    const minW = effMinW(collapsedRef.current);
     const move = (ev: PointerEvent) => {
       setBox(
-        clampBox({
-          ...start,
-          x: start.x + ev.clientX - startX,
-          y: start.y + ev.clientY - startY,
-        }),
+        clampBox(
+          {
+            ...start,
+            x: start.x + ev.clientX - startX,
+            y: start.y + ev.clientY - startY,
+          },
+          minW,
+        ),
       );
     };
     const up = () => {
@@ -266,9 +325,13 @@ export function PanelApp() {
     const startX = e.clientX;
     const startY = e.clientY;
     const start = { ...boxRef.current };
+    const minW = effMinW(collapsedRef.current);
     const move = (ev: PointerEvent) => {
       setBox(
-        clampBox(applyEdge(start, edge, ev.clientX - startX, ev.clientY - startY)),
+        clampBox(
+          applyEdge(start, edge, ev.clientX - startX, ev.clientY - startY, minW),
+          minW,
+        ),
       );
     };
     const up = () => {
@@ -282,6 +345,7 @@ export function PanelApp() {
 
   const startRatioDrag = (e: React.PointerEvent) => {
     e.preventDefault();
+    if (collapsedRef.current.wb || collapsedRef.current.agent) return; // 单栏收起时比例无意义
     const startX = e.clientX;
     const startRatio = ratioRef.current;
     const panelW = boxRef.current.w;
@@ -297,7 +361,14 @@ export function PanelApp() {
     window.addEventListener("pointerup", up);
   };
 
-  const wbWidth = Math.max(200, Math.round((box.w - TOOLBAR_W) * ratio));
+  // 布局宽度：双栏按 ratio 分配；单栏收起时另一侧占满（面板总宽不变）
+  const contentW = box.w - TOOLBAR_W;
+  const wbWidth = collapsed.wb
+    ? 0
+    : collapsed.agent
+      ? contentW
+      : Math.max(200, Math.round(contentW * ratio));
+  const agentWidth = contentW - wbWidth;
 
   return (
     <>
@@ -317,7 +388,11 @@ export function PanelApp() {
         data-closed={!open}
         style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
       >
-        <div className="la-col-whiteboard" style={{ flex: `0 0 ${wbWidth}px` }}>
+        <div
+          className="la-col-whiteboard"
+          data-anim={colAnim}
+          style={{ flex: `0 0 ${wbWidth}px` }}
+        >
           <div className="la-wb-topbar la-drag" onPointerDown={startMove}>
             画笔 / 写字等工具（Phase 2）
           </div>
@@ -328,12 +403,20 @@ export function PanelApp() {
         </div>
         <div className="la-toolbar" onPointerDown={startRatioDrag}>
           <button
-            className="la-tool-btn la-collapse"
-            title="收起为悬浮图标"
+            className="la-collapse"
+            title="收起面板"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={closePanel}
           >
-            ⌄
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path
+                d="M6 6l12 12M18 6L6 18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+              />
+            </svg>
           </button>
           {TOOLS.map((t) => (
             <button
@@ -347,7 +430,11 @@ export function PanelApp() {
             </button>
           ))}
         </div>
-        <div className="la-col-agent">
+        <div
+          className="la-col-agent"
+          data-anim={colAnim}
+          style={{ flex: `0 0 ${agentWidth}px` }}
+        >
           <div className="la-agent-head la-drag" onPointerDown={startMove}>
             <span>
               {meta.title} · {meta.difficulty}
@@ -369,6 +456,30 @@ export function PanelApp() {
             onPointerDown={startResize(edge)}
           />
         ))}
+        {/* 单栏收起/展开"耳朵"按钮：贴在工具栏两竖边外侧、垂直居中；
+            对应栏收起时贴到面板外缘，避免跑出面板 */}
+        <button
+          className="la-ear"
+          data-anim={colAnim}
+          style={{ left: Math.max(0, wbWidth - EAR_W) }}
+          title={collapsed.wb ? "展开白板" : "收起白板"}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => toggleCol("wb")}
+        >
+          {collapsed.wb ? "›" : "‹"}
+        </button>
+        <button
+          className="la-ear"
+          data-anim={colAnim}
+          style={{
+            left: Math.min(box.w - EAR_W, wbWidth + TOOLBAR_W),
+          }}
+          title={collapsed.agent ? "展开对话" : "收起对话"}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => toggleCol("agent")}
+        >
+          {collapsed.agent ? "‹" : "›"}
+        </button>
       </div>
       {popover && open && (
         <div

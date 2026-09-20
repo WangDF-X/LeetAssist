@@ -120,13 +120,55 @@ export const PANEL_CSS = `
 }
 .la-tool-btn:hover { background: #dde3ea; }
 .la-tool-btn[data-active="true"] { background: #22a7f0; color: #fff; }
+/* 一键收起为悬浮图标：工具栏顶部通栏按钮，窗口式 X 图案，hover 变红 */
 .la-collapse {
-  color: #22a7f0;
-  font-size: 15px;
+  width: 100%;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: #e2e7ee;
+  color: #6b7280;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: -8px 0 2px; /* 抵消工具栏 padding-top，通栏贴顶 */
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.la-collapse:hover { background: #e5484d; color: #fff; }
+.la-collapse:active { background: #d13438; color: #fff; }
+/* 单栏收起/展开"耳朵"按钮：绝对定位贴在工具栏竖边外侧，垂直居中 */
+.la-ear {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 52px;
+  padding: 0;
+  border: 1px solid #d8dce3;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(30, 35, 60, 0.15);
+  color: #6b7280;
+  font-size: 14px;
   line-height: 1;
-  margin-bottom: 4px;
-  border-bottom: 1px solid #d8dce3;
-  border-radius: 0 0 6px 6px;
+  cursor: pointer;
+  z-index: 3;
+}
+.la-ear:hover { background: #eef1f5; color: #22a7f0; }
+/* 跟随栏宽过渡（仅切换瞬间由 data-anim 开启） */
+.la-ear[data-anim="true"] {
+  transition: left 0.28s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+/* 收起/展开时的栏宽过渡（仅切换瞬间由 data-anim 开启） */
+.la-col-whiteboard[data-anim="true"],
+.la-col-agent[data-anim="true"] {
+  transition: flex-basis 0.28s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+.la-col-whiteboard,
+.la-col-agent {
+  overflow: hidden;
 }
 
 .la-col-agent {
