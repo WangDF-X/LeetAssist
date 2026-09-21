@@ -80,3 +80,39 @@ export const THEME_MODE_LABEL: Record<ThemeMode, string> = {
   dark: "深色",
   system: "跟随系统",
 };
+
+// ---- 画板语义值（03-whiteboard §4.2）----
+// Konva 画布不吃 CSS 变量，语义色/线宽在此以 JS 值导出，渲染时按主题映射。
+// 数据层只存 id（"default" 等），主题切换无需迁移数据（杜绝"黑纸黑线"）。
+
+export type WBColorId = "default" | "red" | "blue" | "green" | "orange";
+export type WBWidthId = "thin" | "medium" | "thick";
+export type GridMode = "dots" | "lines" | "none";
+
+export const WB_COLORS: Record<WBColorId, Record<ResolvedTheme, string>> = {
+  default: { light: "#1f2937", dark: "#e5e7eb" },
+  red: { light: "#dc2626", dark: "#f87171" },
+  blue: { light: "#2563eb", dark: "#60a5fa" },
+  green: { light: "#16a34a", dark: "#4ade80" },
+  orange: { light: "#ea580c", dark: "#fb923c" },
+};
+
+export const WB_WIDTHS: Record<WBWidthId, number> = {
+  thin: 2,
+  medium: 3.5,
+  thick: 6,
+};
+
+/** 网格颜色（点阵/线格共用） */
+export const WB_GRID_COLORS: Record<ResolvedTheme, string> = {
+  light: "#d8dce3",
+  dark: "#3a3e4a",
+};
+
+export const GRID_MODES: readonly GridMode[] = ["dots", "lines", "none"];
+
+export const GRID_MODE_LABEL: Record<GridMode, string> = {
+  dots: "点阵",
+  lines: "线格",
+  none: "无网格",
+};

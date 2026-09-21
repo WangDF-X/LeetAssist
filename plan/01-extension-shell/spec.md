@@ -196,3 +196,5 @@ interface ProblemMeta {
 | 2026-09-20 | 一键收回按钮改为窗口式 X 图案（hover 变红）；新增 `persistOnClose` 关闭前数据保存钩子（预留给 03/04/05 模块挂接） |
 | 2026-09-20 | 新增 §3.7 主题与设计令牌：浅/深/跟随系统三模式（默认跟随系统），品牌色板（源 logo），`--la-*` token 硬规则 + `check:theme` 构建前检查（防止后续模块硬编码颜色） |
 | 2026-09-21 | §3.5 SPA 切题检测在 Phase 2（画板分支）落地：画板按题恢复依赖 problemId 广播，故提前实现（content 层 pushState/popstate + MutationObserver → 自定义事件） |
+| 2026-09-21 | 切题后标题刷新改为双通道事件驱动：路由广播即时刷新（slug 兜底）+ `<title>` 节点 MutationObserver 精确补正（替代定时器重试，弱网可靠） |
+| 2026-09-21 | §3.1 第一层落地：放弃依赖 document.title/DOM 时序（三代方案均失败，详见 record/problem-in-develop.md），改为按 slug 打 leetcode.cn GraphQL（同源）取标题/难度/标签/通过率，slug 兜底 + 缓存；Monaco 代码读取、DOM 兜底选择器仍 TODO |

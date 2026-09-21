@@ -102,6 +102,118 @@ ${THEME_VARS_CSS}
   color: var(--la-text-faint);
   font-size: 13px;
 }
+/* Konva 画布容器：填满 wb-body 剩余空间，背景随主题 */
+.la-wb-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--la-surface);
+  overflow: hidden;
+}
+.la-wb-stage[data-panning="true"] { cursor: grab; }
+.la-wb-stage[data-panning="true"]:active { cursor: grabbing; }
+.la-wb-zoomreset {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--la-border);
+  border-radius: 6px;
+  background: var(--la-surface);
+  color: var(--la-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 2;
+}
+.la-wb-zoomreset:hover { background: var(--la-hover); }
+
+/* 画板工具行按钮 */
+.la-wb-tool {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--la-text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.la-wb-tool:hover:not(:disabled) { background: var(--la-hover); }
+.la-wb-tool:disabled { opacity: 0.4; cursor: default; }
+.la-wb-tool[data-active="true"] {
+  background: var(--la-accent);
+  color: var(--la-on-accent);
+}
+.la-wb-danger:hover:not(:disabled) {
+  background: var(--la-danger);
+  color: var(--la-on-accent);
+}
+.la-wb-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 2px;
+  background: var(--la-border-soft);
+}
+/* 属性条：颜色点 + 线宽 */
+.la-wb-attrbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--la-border-soft);
+}
+.la-wb-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.la-wb-color[data-active="true"] {
+  border-color: var(--la-accent);
+  box-shadow: 0 0 0 2px var(--la-surface);
+}
+.la-wb-width {
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--la-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.la-wb-width:hover { background: var(--la-hover); }
+.la-wb-width[data-active="true"] {
+  background: var(--la-accent);
+  color: var(--la-on-accent);
+}
+/* 清空二次确认条 */
+.la-wb-confirm {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--la-border);
+  border-radius: 8px;
+  background: var(--la-surface);
+  box-shadow: var(--la-shadow-pop);
+  color: var(--la-text);
+  font-size: 12px;
+  z-index: 4;
+  white-space: nowrap;
+}
+/* 工具光标 */
+.la-wb-stage[data-tool="pen"],
+.la-wb-stage[data-tool="rect"],
+.la-wb-stage[data-tool="ellipse"],
+.la-wb-stage[data-tool="arrow"],
+.la-wb-stage[data-tool="text"] { cursor: crosshair; }
 
 .la-toolbar {
   width: 46px;

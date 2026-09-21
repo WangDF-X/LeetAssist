@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getProblemMetaStub } from "./problemMeta";
+import {
+  fallbackMeta,
+  fetchProblemMeta,
+  getProblemMetaStub,
+  PROBLEM_CHANGED_EVENT,
+  type ProblemMeta,
+} from "./problemMeta";
 import {
   nextThemeMode,
   resolveTheme,
   THEME_MODE_LABEL,
+  type GridMode,
   type ThemeMode,
 } from "./theme";
+import { Whiteboard } from "./whiteboard/Whiteboard";
 
 interface Box {
   x: number;
@@ -146,6 +154,8 @@ export function PanelApp() {
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia("(prefers-color-scheme: dark)").matches,
   );
+  // 背景网格样式（03 §5.1：全局设置，持久化）
+  const [gridMode, setGridMode] = useState<GridMode>("dots");
   const panelRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLButtonElement>(null);
   const colAnimTimer = useRef<number | undefined>(undefined);
@@ -159,11 +169,38 @@ export function PanelApp() {
   const logoPosRef = useRef(logoPos);
   logoPosRef.current = logoPos;
 
-  const meta = getProblemMetaStub();
+  // 当前题 slug：SPA 切题时由 content 层广播更新（01 §3.5），驱动画板切题恢复与标题刷新
+  const [problemId, setProblemId] = useState(
+    () => getProblemMetaStub().problemId,
+  );
+  const [meta, setMeta] = useState<ProblemMeta>(getProblemMetaStub);
+
+  useEffect(() => {
+    const onProblemChanged = (e: Event) => {
+      const id = (e as CustomEvent<{ problemId: string }>).detail?.problemId;
+      if (id) setProblemId(id);
+    };
+    window.addEventListener(PROBLEM_CHANGED_EVENT, onProblemChanged);
+    return () =>
+      window.removeEventListener(PROBLEM_CHANGED_EVENT, onProblemChanged);
+  }, []);
+
+  // 题目信息：切题瞬间用 slug 兜底显示，同时按 slug 打 GraphQL（01 §3.1 数据源优先，
+  // 不依赖 document.title / DOM 时序；带缓存，回切已读过的题立即命中）
+  useEffect(() => {
+    setMeta(fallbackMeta(problemId));
+    let cancelled = false;
+    fetchProblemMeta(problemId).then((m) => {
+      if (m && !cancelled) setMeta(m);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [problemId]);
 
   useEffect(() => {
     chrome.storage.local.get(
-      ["panelBox", "panelRatio", "logoY", "collapsed", "themeMode"],
+      ["panelBox", "panelRatio", "logoY", "collapsed", "themeMode", "gridMode"],
       (saved) => {
         if (saved.panelBox) setBox(clampBox(saved.panelBox as Box));
         if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
@@ -176,6 +213,12 @@ export function PanelApp() {
           saved.themeMode === "system"
         )
           setThemeMode(saved.themeMode);
+        if (
+          saved.gridMode === "dots" ||
+          saved.gridMode === "lines" ||
+          saved.gridMode === "none"
+        )
+          setGridMode(saved.gridMode);
       },
     );
   }, []);
@@ -419,6 +462,7 @@ export function PanelApp() {
         ref={panelRef}
         className="la-panel"
         data-closed={!open}
+        data-problem-id={problemId}
         style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
       >
         <div
@@ -426,13 +470,11 @@ export function PanelApp() {
           data-anim={colAnim}
           style={{ flex: `0 0 ${wbWidth}px` }}
         >
-          <div className="la-wb-topbar la-drag" onPointerDown={startMove}>
-            画笔 / 写字等工具（Phase 2）
-          </div>
-          <div className="la-wb-body">
-            <div className="la-wb-shapes">常用图形</div>
-            <div className="la-wb-canvas">画板区域（Phase 2 引入 Konva）</div>
-          </div>
+          <Whiteboard
+            theme={resolvedTheme}
+            gridMode={gridMode}
+            onDragPanel={startMove}
+          />
         </div>
         <div className="la-toolbar" onPointerDown={startRatioDrag}>
           <button
