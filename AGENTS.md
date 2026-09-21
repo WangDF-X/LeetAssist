@@ -176,7 +176,7 @@ Draft → Confirmed → In Progress → Done
 src/
 ├── background/     对应 plan/01-extension-shell
 ├── content/        对应 plan/01-extension-shell
-├── sidepanel/
+├── panel/          对应 plan/01-extension-shell（页内悬浮面板外壳 + 主题 token）
 │   ├── whiteboard/ 对应 plan/03-whiteboard
 │   ├── ai/         对应 plan/04-ai-assistant
 │   ├── timer/      对应 plan/05-timer

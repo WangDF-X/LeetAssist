@@ -1,9 +1,9 @@
 # 03. Whiteboard（画板）Spec
 
-- 状态：Confirmed（UI 设计为 Agent 初版稿，用户看到实际效果后提修改意见，反馈通过更新本 spec 处理）
+- 状态：In Progress（2026-09-21 开出 `feature/whiteboard-konva` 分支）
 - 关联阶段：Phase 2
-- 最后更新：2026-09-15
-- 涉及代码目录：`src/sidepanel/whiteboard/`
+- 最后更新：2026-09-21
+- 涉及代码目录：`src/panel/whiteboard/`
 
 ## 1. 目标（In Scope）
 
@@ -38,16 +38,99 @@
 
 ## 4. 数据结构 / 接口
 
+### 4.1 设计原则
+
+1. **自定义元素模型**（2026-09-21 用户决策，替代原 `stage.toJSON()` 方案）：画板数据 = 扁平的元素数组，与 Konva 内部表示解耦。理由：① 主题语义色要求数据不含字面颜色（深浅色切换时已有图形自动跟随，杜绝"黑纸黑线"）；② 比 `stage.toJSON()` 更紧凑（利于 100KB 目标）；③ 与 LLM 程序化生成天然契合——LLM 只需产出一个 JSON 数组，无需了解 Konva。
+2. **语义化属性**：颜色/线宽存语义 id，渲染时按当前主题映射为实际值（`src/panel/theme.ts`）。
+3. **世界坐标**：元素坐标为世界坐标（逻辑像素，+x 右、+y 下），视图缩放/平移只影响显示、不进数据。
+
+### 4.2 元素模型
+
 ```ts
-interface WhiteboardSnapshot {
-  schemaVersion: number; // 与 02-storage 的惰性兼容策略对齐
-  stage: unknown;        // Konva stage.toJSON() 的输出（Layer/Group/Shape 节点树）
+/** 语义色 id：渲染时按主题映射（theme.ts WB_COLORS），数据不含字面颜色 */
+type WBColorId = "default" | "red" | "blue" | "green" | "orange";
+/** 语义线宽 id：渲染时映射为像素（theme.ts） */
+type WBWidthId = "thin" | "medium" | "thick";
+
+interface WBElementBase {
+  id: string;            // 唯一 id；手绘元素 nanoid，覆盖层程序化元素用 "ov-" 前缀
+  color: WBColorId;      // 缺省 "default"
+  width: WBWidthId;      // 缺省 "medium"
+}
+
+/** 画笔自由路径 */
+interface WBPathElement extends WBElementBase {
+  type: "path";
+  points: number[];      // 扁平 [x1,y1,x2,y2,...]，入库前 simplify-js 抽稀 + 坐标取整
+}
+/** 矩形：x,y = 左上角 */
+interface WBRectElement extends WBElementBase {
+  type: "rect";
+  x: number; y: number; w: number; h: number;
+}
+/** 椭圆：x,y = 外接框左上角（与 rect 参数形态一致，降低 LLM 记忆负担） */
+interface WBEllipseElement extends WBElementBase {
+  type: "ellipse";
+  x: number; y: number; w: number; h: number;
+}
+/** 箭头 / 直线：两点式 [x1,y1,x2,y2] */
+interface WBArrowElement extends WBElementBase {
+  type: "arrow";
+  points: [number, number, number, number];
+}
+interface WBLineElement extends WBElementBase {
+  type: "line";
+  points: [number, number, number, number];
+}
+/** 文本：x,y = 左上角 */
+interface WBTextElement extends WBElementBase {
+  type: "text";
+  x: number; y: number;
+  text: string;
+  size?: number;         // 字号，缺省 16
+}
+
+type WBElement = WBPathElement | WBRectElement | WBEllipseElement
+               | WBArrowElement | WBLineElement | WBTextElement;
+```
+
+- z 序 = 数组顺序（越靠后越在上层），无独立 z 字段。
+- 每种类型"最小必填 + 语义缺省"，未知字段在加载时剥离（见 4.4）。
+
+### 4.3 场景模型（三层架构的持久化形态）
+
+```ts
+interface WBViewState {
+  scale: number;     // 0.1–4
+  offsetX: number;
+  offsetY: number;
+}
+
+interface WhiteboardScene {
+  schemaVersion: number;   // 当前 1；与 02-storage 惰性兼容策略对齐
+  elements: WBElement[];   // 绘制层：用户手绘内容
+  overlay: WBElement[];    // 覆盖层：程序化生成元素（未来 AI 作图 / trace 高亮）
+  view: WBViewState;       // 每题记住自己的视口
 }
 ```
 
-- Konva `toJSON()` 只序列化显式设置过的属性，格式天然紧凑；写入时坐标取整，再用 `lz-string` 压缩后存 IndexedDB。
-- 画笔路径入库前用 `simplify-js` 抽稀点位。
-- **100KB 目标的处理**：保存时计算压缩后大小，若超过 100KB，弹一次轻量提示（toast）告知"本题画板数据偏大，建议清理无用笔迹"，不阻断保存、不自动删用户数据。
+- 持久化：`JSON.stringify(scene)` → `lz-string` 压缩 → `ProblemSession.whiteboard`（02 spec）；背景层（网格）是纯渲染、不入库。
+- **覆盖层与绘制层同构**（同一 `WBElement` 模型），程序化管线与用户渲染管线完全复用；覆盖层支持整体清空 + 批量重绘（`setOverlay(elements)`），不污染手绘内容。
+
+### 4.4 LLM 程序化生成契约（架构留门的核心）
+
+未来 AI 作图 / trace 渲染向覆盖层写入时，输入 = 4.2 的 `WBElement[]` JSON。加载管线统一做防御性校验：
+
+1. 逐元素校验 `type` 合法、必填字段存在且为有限数值、字符串字段确为字符串；
+2. 数值 clamp 到合理范围（坐标 ±100000、尺寸 ≤ 100000、字号 8–72）；
+3. 未知字段剥离、非法元素丢弃并计数，UI 一次性提示"N 个元素无法识别已跳过"；
+4. `id` 缺失时自动生成 `ov-` 前缀 id。
+
+效果：LLM 的 prompt 只需描述 4.2 的类型表，无需了解 Konva / 存储 / 压缩的任何细节；校验层保证垃圾输入不污染画板。
+
+### 4.5 紧凑化与 100KB 目标
+
+坐标取整（保留 1 位小数）、path 抽稀（simplify-js，tolerance ≈ 1.0）、语义 id 短字符串。保存时估算压缩后大小，超过 100KB 弹一次轻量提示（toast）告知"本题画板数据偏大，建议清理无用笔迹"，不阻断保存、不自动删用户数据。
 
 ## 5. UI / 交互（Agent 初版设计稿，待用户看效果后提修改意见）
 
@@ -63,6 +146,7 @@ interface WhiteboardSnapshot {
 - **左侧常用图形竖条**（画布左缘垂直条）：一键插入或拖出常用图形预设（矩形/圆形/箭头/直线/文本框），缩短常用形状的使用路径。
 - 画布右下角：缩放比例显示（如 `100%`）+ 点击复位视图按钮。
 - "清空"需要二次确认弹窗（防误触丢数据）。
+- **背景网格三样式**（2026-09-21 用户确认）：点阵（默认）/ 线格 / 无网格，入口在 01 骨架预留的"白板设置"popover（该 popover 的第一个真实内容）；`gridMode` 为全局设置（不按题），持久化 `chrome.storage.local`；网格颜色随主题。实现顺序上排在核心绘图功能之后。
 - 白板区为面板左栏，默认占比约 55%–60%（拖 01 的中间分隔线可调），画布保持常规画图比例。
 
 ### 5.2 快捷键与鼠标行为（第一版范围）
@@ -76,6 +160,10 @@ interface WhiteboardSnapshot {
 | 缩放 | 滚轮（光标为中心，范围 10%–400%） |
 | 平移 | Space + 鼠标拖动 |
 
+**快捷键/鼠标门控（2026-09-21 补充，重要交互约束）**：上述所有快捷键与 Space 平移仅在**指针悬停于画布区域**时生效，且文本编辑进行中屏蔽工具切换快捷键——避免与 LeetCode Monaco 编辑器按键冲突（用户在代码里按 Delete / Ctrl+Z / Space 时绝不能误伤画板）。实现方式：跟踪画板 hover 状态作为所有快捷键的总开关。
+
+**主题适配（2026-09-21 补充）**：画布纸面色、网格色随主题（`--la-*` token 对应的 JS 值，theme.ts 导出）；图形颜色即 4.2 语义色，主题切换时全量重渲染自动跟随，无需迁移数据。
+
 ### 5.3 画板分层
 
 - `背景层`：网格等静态内容，不重绘；
@@ -88,18 +176,22 @@ interface WhiteboardSnapshot {
 
 ## 6. 依赖
 
-- 依赖的其他 spec：02-storage（持久化）
-- 依赖的第三方库：`konva`、`react-konva`（主版本需与项目 React 主版本匹配）、`simplify-js`（画笔抽稀）、`lz-string`（压缩）
+- 依赖的其他 spec：02-storage（持久化）、01-extension-shell（SPA 切题检测提供 problemId 广播、主题 token 体系）
+- 依赖的第三方库：`konva`、`react-konva`（主版本与 React 18 匹配）、`simplify-js`（画笔抽稀）、`lz-string`（压缩）
+- 键盘/鼠标交互必须与 LeetCode Monaco 编辑器隔离（见 5.2 门控约束）
 
 ## 7. 验收标准
 
 - [ ] 能自由绘图、加箭头/矩形/圆形/文本，能拖拽、缩放、撤销/重做、清空（清空有二次确认）。
 - [ ] 鼠标右键点击画板空白处直接进入文字输入，不弹默认右键菜单。
 - [ ] 滚轮缩放、Space+拖动平移工作正常。
-- [ ] 编辑停止 1 秒后自动保存；切题/刷新后内容正确恢复。
+- [ ] **快捷键门控生效**：指针不在画布区域（如在 Monaco 中打字）时，Delete/Ctrl+Z/Space 等不影响画板。
+- [ ] 编辑停止 1 秒后自动保存；切题/刷新后内容正确恢复（依赖 01 的 SPA 切题检测）。
 - [ ] 单题画板压缩后存储 ≤ 100KB；超限时有一次性提示且不阻断保存。
-- [ ] 覆盖层可被程序整体清空并批量重绘，不影响绘制层。
-- [ ] 常规绘图交互无明显卡顿（Side Panel 小窗口场景，定性验收）。
+- [ ] 覆盖层可被程序整体清空并批量重绘（同构 WBElement[]），不影响绘制层。
+- [ ] **主题适配**：深/浅主题切换后，画布底色、网格、已有图形（语义色）均正确跟随，无"黑纸黑线"。
+- [ ] 网格三样式（点阵/线格/无）可在白板设置 popover 切换并持久化。
+- [ ] 常规绘图交互无明显卡顿（页内悬浮面板场景，定性验收）。
 
 ## 8. 待确认问题
 
@@ -114,3 +206,4 @@ interface WhiteboardSnapshot {
 | 2026-09-15 | 最终确定画板库为 Konva + react-konva，记录选型理由 |
 | 2026-09-15 | 确认全部待确认问题：UI 由 Agent 出初版设计稿（工具栏/快捷键/分层）、交互范围（右键=文字/滚轮缩放/Space 平移）、单题存储 ≤100KB、自动保存防抖 1s；AI 作图明确不做进第一版；状态改为 **Confirmed** |
 | 2026-09-15 | 按用户 mockup 调整布局：画板作为统一面板左栏（顶部工具行 + 左侧常用图形竖条），默认占比 55%–60% |
+| 2026-09-21 | Phase 2 启动（用户确认）：① §4 重写为**自定义元素模型**（语义色/线宽 id，替代 `stage.toJSON()`，含 LLM 程序化生成契约与校验管线，世界坐标与视图分离）；② 网格三样式（点阵/线格/无）进白板设置 popover，排在核心功能之后；③ 新增快捷键 hover 门控与主题适配约束；④ 目录修正为 `src/panel/whiteboard/`（sidepanel 已废弃）；⑤ 状态 → In Progress |
