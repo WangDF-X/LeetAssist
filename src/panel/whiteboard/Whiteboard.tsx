@@ -124,10 +124,10 @@ function clampScale(s: number): number {
 }
 
 /** 单个元素 → Konva 节点（语义色/线宽按主题映射，§4.2）
- * 交互模型（§5.4，2026-09-21 用户定）：
- * - movable：仅"选择态下已选中（边框已出现）"的元素为 true，此时可拖动换位
- * - selectable：选择态可点击选中；点击已选中文本进入编辑
- * - 绘制态一律 movable=false（画笔写字不再误拖已有笔画）
+ *  交互模型（§5.4，2026-09-22 用户修正版）：
+ *  - movable：画笔态一律不可拖；选择态仅已选中可拖；其他绘制工具=已有图形可直接拖
+ *    （新建起笔由 Stage pointerdown 的 e.target 守卫让位给拖动）
+ *  - selectable：选择态可点击选中；点击已选中文本进入编辑
  */
 function ElementNode({
   el,
@@ -462,7 +462,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       if (t === "text") {
         // 文本工具：点击处创建文本元素并立即进入编辑（§5.1）
         // 注意：先不入历史，等文本提交时再 commitElements（取消/空文本则静默移除）
-        if (e.target !== stage) return; // 点在已有元素上不新建（留给双击编辑）
+        if (e.target !== stage) return; // 点在已有元素上不新建（让位给拖动/双击编辑）
         const el: WBTextElement = {
           id: genId(),
           type: "text",
@@ -476,9 +476,11 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         setEditingId(el.id);
         return;
       }
-      // 绘制工具（画笔/矩形/圆形/箭头）：一律起笔——即使起点落在已有图形上
-      // （绘制态元素不可拖动，命中已有图形也必须能继续画，2026-09-21 修复）
       const type = t as DraftState["type"];
+      // 画笔：一律起笔——即使起点落在已有笔画上（画笔态元素不可拖，无让位问题）
+      // 矩形/圆形/箭头：点中已有元素（非 Stage）时不起笔，让位给该元素的直接拖动
+      // （图形走边缘热区、文本走整块区域；从空白处按下才画新图形，§5.4 分工具规则）
+      if (type !== "pen" && e.target !== stage) return;
       setDraft({ type, startX: w.x, startY: w.y, points: [w.x, w.y] });
     },
     [panning, toWorld, color, width],
@@ -822,11 +824,19 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     return out;
   }, [bindings.tools]);
 
-  // 交互模型（§5.4，2026-09-21 用户定）：
-  // - 绘制态（画笔/矩形/圆形/箭头/文本）：只绘制，任何元素都不可拖动
-  //   （修掉"画笔写字时误拖已有笔画"）
+  // 交互模型（§5.4，2026-09-22 用户修正版）：
+  // - 画笔态：任何元素不可拖（修"画笔写字误拖已有笔画"），且起笔可落在已有图形上
+  // - 其他绘制工具（矩形/圆形/箭头/文本）：已有图形可直接拖动（线条类走 12px 边缘
+  //   热区、文本整块区域）；新建只在空白处按下才起笔（onPointerDown 守卫让位给拖动）
   // - 选择态：点击元素出现边框（选中）后，该元素才可拖动/缩放；再次点击文本进入编辑
+  // - Space 平移中一律禁拖
   const selectable = tool === "select" && !panning;
+  const movableOf = (id: string) =>
+    panning || tool === "pen"
+      ? false
+      : tool === "select"
+        ? id === selectedId
+        : true;
 
   // 元素 hover 光标反馈（仅"已选中、可拖动"时显示 move）
   const onHoverCursor = useCallback((cursor: string) => {
@@ -914,7 +924,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                     key={el.id}
                     el={el}
                     theme={theme}
-                    movable={selectable && el.id === selectedId}
+                    movable={movableOf(el.id)}
                     selectable={selectable}
                     nodeRef={registerNode}
                     onSelect={onSelect}
