@@ -214,6 +214,23 @@ ${THEME_VARS_CSS}
 .la-wb-stage[data-tool="ellipse"],
 .la-wb-stage[data-tool="arrow"],
 .la-wb-stage[data-tool="text"] { cursor: crosshair; }
+/* 文本编辑覆盖层（Konva textarea 方案） */
+.la-wb-texteditor {
+  position: absolute;
+  margin: 0;
+  padding: 2px 4px;
+  border: 1px dashed var(--la-accent);
+  border-radius: 4px;
+  background: var(--la-surface);
+  outline: none;
+  font-family: inherit;
+  line-height: 1.3;
+  resize: none;
+  overflow: hidden;
+  z-index: 5;
+  min-width: 80px;
+  box-shadow: var(--la-shadow-ear);
+}
 
 .la-toolbar {
   width: 46px;

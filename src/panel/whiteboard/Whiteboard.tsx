@@ -18,25 +18,87 @@ import {
   Ellipse,
   Arrow,
   Text,
+  Shape,
   Transformer,
 } from "react-konva";
 import type Konva from "konva";
 import simplify from "simplify-js";
 import type { ResolvedTheme, GridMode, WBColorId, WBWidthId } from "../theme";
 import { WB_COLORS, WB_WIDTHS, WB_GRID_COLORS } from "../theme";
-import type { WBElement, WBViewState } from "./model";
+import type { WBElement, WBTextElement, WBViewState } from "./model";
 import { genId } from "./model";
 import { HistoryStack } from "./HistoryStack";
+import {
+  DEFAULT_BINDINGS,
+  loadBindings,
+  matchKey,
+  type WBBindings,
+} from "./bindings";
 import {
   WhiteboardToolbar,
   WhiteboardAttrBar,
   type WBTool,
 } from "./Toolbar";
+import { TextEditor } from "./TextEditor";
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 4;
 const GRID_GAP = 24;
 const MIN_DRAG = 3; // 世界坐标下小于该位移视为误触，不生成图形
+
+/** 背景网格：单个 Shape + sceneFunc 直接 canvas 绘制（替代每点一个节点——
+ *  缩小到 20% 时可见世界范围扩大 25 倍，节点数会爆炸到 2 万+ 卡死渲染）。
+ *  间距按缩放自适应放大，屏幕密度保持恒定。 */
+function GridShape({
+  theme,
+  gridMode,
+  view,
+  size,
+}: {
+  theme: ResolvedTheme;
+  gridMode: GridMode;
+  view: WBViewState;
+  size: Size;
+}) {
+  const color = WB_GRID_COLORS[theme];
+  return (
+    <Shape
+      listening={false}
+      sceneFunc={(ctx) => {
+        if (gridMode === "none") return;
+        const c = ctx._context; // 原生 CanvasRenderingContext2D，直接绘制最快
+        // 自适应间距：屏幕上太密（<10px）就按 2 的幂放大世界间距
+        let gap = GRID_GAP;
+        while (gap * view.scale < 10) gap *= 2;
+        const x0 = Math.floor(-view.offsetX / view.scale / gap) * gap;
+        const x1 = (size.w - view.offsetX) / view.scale + gap;
+        const y0 = Math.floor(-view.offsetY / view.scale / gap) * gap;
+        const y1 = (size.h - view.offsetY) / view.scale + gap;
+        if (gridMode === "lines") {
+          c.beginPath();
+          c.strokeStyle = color;
+          c.lineWidth = 1 / view.scale;
+          for (let x = x0; x <= x1; x += gap) {
+            c.moveTo(x, y0);
+            c.lineTo(x, y1);
+          }
+          for (let y = y0; y <= y1; y += gap) {
+            c.moveTo(x0, y);
+            c.lineTo(x1, y);
+          }
+          c.stroke();
+        } else {
+          // 点阵：以间隔交点为中心的小方块（fillRect 比 arc 快）
+          c.fillStyle = color;
+          const r = 1.2 / view.scale;
+          for (let x = x0; x <= x1; x += gap)
+            for (let y = y0; y <= y1; y += gap)
+              c.fillRect(x - r, y - r, r * 2, r * 2);
+        }
+      }}
+    />
+  );
+}
 
 export interface WhiteboardProps {
   theme: ResolvedTheme;
@@ -61,21 +123,30 @@ function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 }
 
-/** 单个元素 → Konva 节点（语义色/线宽按主题映射，§4.2） */
+/** 单个元素 → Konva 节点（语义色/线宽按主题映射，§4.2）
+ * 交互模型（§5.4，2026-09-21 用户定）：
+ * - movable：仅"选择态下已选中（边框已出现）"的元素为 true，此时可拖动换位
+ * - selectable：选择态可点击选中；点击已选中文本进入编辑
+ * - 绘制态一律 movable=false（画笔写字不再误拖已有笔画）
+ */
 function ElementNode({
   el,
   theme,
-  interactive,
+  movable,
+  selectable,
   nodeRef,
   onSelect,
+  onHoverCursor,
   onDragEnd,
   onTransformEnd,
 }: {
   el: WBElement;
   theme: ResolvedTheme;
-  interactive: boolean;
+  movable: boolean;
+  selectable: boolean;
   nodeRef: (id: string, node: Konva.Node | null) => void;
   onSelect: (id: string) => void;
+  onHoverCursor: (cursor: string) => void;
   onDragEnd: (id: string, e: Konva.KonvaEventObject<DragEvent>) => void;
   onTransformEnd: (id: string, e: Konva.KonvaEventObject<Event>) => void;
 }) {
@@ -84,13 +155,15 @@ function ElementNode({
   const common = {
     id: el.id,
     ref: (n: Konva.Node | null) => nodeRef(el.id, n),
-    draggable: interactive,
-    onClick: () => interactive && onSelect(el.id),
-    onTap: () => interactive && onSelect(el.id),
+    draggable: movable,
+    onClick: () => selectable && onSelect(el.id),
+    onTap: () => selectable && onSelect(el.id),
+    onMouseEnter: movable ? () => onHoverCursor("move") : undefined,
+    onMouseLeave: movable ? () => onHoverCursor("") : undefined,
     onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) =>
-      interactive && onDragEnd(el.id, e),
+      movable && onDragEnd(el.id, e),
     onTransformEnd: (e: Konva.KonvaEventObject<Event>) =>
-      interactive && onTransformEnd(el.id, e),
+      selectable && onTransformEnd(el.id, e),
   };
   switch (el.type) {
     case "path":
@@ -185,16 +258,25 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const [color, setColor] = useState<WBColorId>("default");
   const [width, setWidth] = useState<WBWidthId>("medium");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null); // 正在编辑文本的元素 id
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [panning, setPanning] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [historyTick, setHistoryTick] = useState(0); // 驱动撤销/重做按钮可用态
 
   const historyRef = useRef(new HistoryStack());
+  // 交互绑定（快捷键/右键行为）：默认 + 用户覆盖（bindings.ts，自定义功能后续做）
+  const [bindings, setBindings] = useState<WBBindings>(DEFAULT_BINDINGS);
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
+  useEffect(() => {
+    loadBindings().then(setBindings);
+  }, []);
   const elementsRef = useRef(elements);
   elementsRef.current = elements;
   const spaceRef = useRef(false);
   const hoverRef = useRef(false);
+  const justDraggedRef = useRef(false); // 刚完成拖动：用于忽略紧随的 click
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const selectedRef = useRef(selectedId);
@@ -269,46 +351,43 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     setSelectedId(null);
   }, [commitElements]);
 
-  // ---------- 快捷键（§5.2 hover 门控） ----------
+  // ---------- 快捷键（§5.2 hover 门控；绑定来自 bindings.ts 配置，不写死） ----------
 
   useEffect(() => {
-    const TOOL_KEYS: Record<string, WBTool> = {
-      v: "select",
-      p: "pen",
-      r: "rect",
-      o: "ellipse",
-      a: "arrow",
-      t: "text",
-    };
     const onKeyDown = (e: KeyboardEvent) => {
       if (!hoverRef.current) return; // 门控：不在画板区域不响应
       const target = e.target as HTMLElement;
       if (target.closest("textarea, input, [contenteditable]")) return; // 文本编辑中让行
+      const b = bindingsRef.current;
 
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      if (matchKey(b.redo, e)) {
         e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
+        redo();
         return;
       }
-      if (e.key === "Delete" || e.key === "Backspace") {
+      if (matchKey(b.undo, e)) {
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if (b.delete.includes(e.key)) {
         if (selectedRef.current) {
           e.preventDefault();
           deleteSelected();
         }
         return;
       }
-      if (e.code === "Space") {
+      if (e.code === b.pan) {
         spaceRef.current = true;
         setPanning(true);
         e.preventDefault();
         return;
       }
-      const t = TOOL_KEYS[e.key.toLowerCase()];
+      const t = b.tools[e.key.toLowerCase()];
       if (t && !e.ctrlKey && !e.metaKey && !e.altKey) setTool(t);
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
+      if (e.code === bindingsRef.current.pan) {
         spaceRef.current = false;
         setPanning(false);
       }
@@ -368,6 +447,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const onPointerDown = useCallback(
     (e: Konva.KonvaEventObject<PointerEvent>) => {
       if (panning || e.evt.button !== 0) return;
+      justDraggedRef.current = false; // 新一次按下：清除拖动守卫
       const stage = stageRef.current;
       const pointer = stage?.getPointerPosition();
       if (!pointer) return;
@@ -379,11 +459,29 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         if (e.target === stage) setSelectedId(null);
         return;
       }
-      if (t === "text") return; // 文本编辑在下一步实现
+      if (t === "text") {
+        // 文本工具：点击处创建文本元素并立即进入编辑（§5.1）
+        // 注意：先不入历史，等文本提交时再 commitElements（取消/空文本则静默移除）
+        if (e.target !== stage) return; // 点在已有元素上不新建（留给双击编辑）
+        const el: WBTextElement = {
+          id: genId(),
+          type: "text",
+          color,
+          width,
+          x: w.x,
+          y: w.y,
+          text: "",
+        };
+        setElements([...elementsRef.current, el]);
+        setEditingId(el.id);
+        return;
+      }
+      // 绘制工具（画笔/矩形/圆形/箭头）：一律起笔——即使起点落在已有图形上
+      // （绘制态元素不可拖动，命中已有图形也必须能继续画，2026-09-21 修复）
       const type = t as DraftState["type"];
       setDraft({ type, startX: w.x, startY: w.y, points: [w.x, w.y] });
     },
-    [panning, toWorld],
+    [panning, toWorld, color, width],
   );
 
   const onPointerMove = useCallback(
@@ -421,8 +519,20 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
           pairs.push({ x: draft.points[i], y: draft.points[i + 1] });
         const simplified = simplify(pairs, 1.0, false);
         const pts = simplified.flatMap((p) => [p.x, p.y]);
-        if (pts.length >= 4)
-          el = { ...base, id: genId(), type: "path", points: pts };
+        // 最小路径过滤：双击/误触产生的极小笔迹（包围盒 < 2px）不落库
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (let i = 0; i < pts.length; i += 2) {
+          minX = Math.min(minX, pts[i]);
+          maxX = Math.max(maxX, pts[i]);
+          minY = Math.min(minY, pts[i + 1]);
+          maxY = Math.max(maxY, pts[i + 1]);
+        }
+        const bigEnough =
+          pts.length >= 4 && Math.max(maxX - minX, maxY - minY) >= 2;
+        if (bigEnough) el = { ...base, id: genId(), type: "path", points: pts };
       }
     } else {
       const [x0, y0, x1, y1] = draft.points;
@@ -462,44 +572,137 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     if (el) commitElements([...elementsRef.current, el]);
   }, [draft, color, width, commitElements]);
 
-  // ---------- 选中/拖拽/变换 ----------
+  // ---------- 文本编辑（§5.1/§5.2：双击已有文本重编、右键快速输入） ----------
+
+  /** 双击文本元素进入编辑：非选择态生效（选择态文本与图形行为一致——只能选中/变换，
+   *  与 §5.4 交互模型统一；2026-09-21 用户定） */
+  const onTextDoubleClick = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (toolRef.current === "select") return;
+      const id = e.target.id();
+      const el = elementsRef.current.find((x) => x.id === id);
+      if (el?.type === "text") {
+        setSelectedId(null);
+        setEditingId(id);
+      }
+    },
+    [],
+  );
+
+  /** 右键（画布任意工具状态下）：拦截默认菜单，在点击处快速输入文本（§5.2）
+   *  行为来自 bindings.contextMenu 配置（未来可在设置中改为其他动作） */
+  const onContextMenu = useCallback(
+    (e: Konva.KonvaEventObject<PointerEvent>) => {
+      e.evt.preventDefault();
+      if (panning) return;
+      if (bindingsRef.current.contextMenu !== "quickText") return;
+      const pointer = stageRef.current?.getPointerPosition();
+      if (!pointer) return;
+      const w = toWorld(pointer);
+      const el: WBTextElement = {
+        id: genId(),
+        type: "text",
+        color,
+        width,
+        x: w.x,
+        y: w.y,
+        text: "",
+      };
+      setElements([...elementsRef.current, el]); // 提交时才入历史
+      setEditingId(el.id);
+    },
+    [panning, toWorld, color, width],
+  );
+
+  const finishTextEdit = useCallback(
+    (id: string, text: string, commit: boolean) => {
+      setEditingId(null);
+      const cur = elementsRef.current;
+      const el = cur.find((x) => x.id === id);
+      if (!el || el.type !== "text") return;
+      const isNew = el.text === ""; // 空文本元素只可能处于"新建未提交"态
+      const trimmed = text.trim();
+
+      if (!commit || trimmed === "") {
+        if (isNew) {
+          // 新建未提交/空内容：静默移除（不入历史）
+          setElements(cur.filter((x) => x.id !== id));
+        } else if (commit && trimmed === "") {
+          // 旧文本被清空：作为删除提交
+          commitElements(cur.filter((x) => x.id !== id));
+        }
+        // else：取消编辑旧文本，无变化
+        return;
+      }
+      // 提交非空文本（新建首次提交 / 旧文本修改统一走这里）
+      commitElements(
+        cur.map((x) =>
+          x.id === id && x.type === "text" ? { ...x, text: trimmed } : x,
+        ),
+      );
+    },
+    [commitElements],
+  );
 
   const onSelect = useCallback((id: string) => {
-    if (toolRef.current === "select") setSelectedId(id);
+    if (toolRef.current !== "select") return;
+    // 拖动结束后的 click 忽略，避免"拖完误进入文本编辑"
+    if (justDraggedRef.current) {
+      justDraggedRef.current = false;
+      return;
+    }
+    if (selectedRef.current === id) {
+      // 已选中（边框已显示）再次点击：文本进入编辑；图形保持选中（无编辑动作）
+      const el = elementsRef.current.find((x) => x.id === id);
+      if (el?.type === "text") {
+        setSelectedId(null);
+        setEditingId(id);
+      }
+      return;
+    }
+    setSelectedId(id);
   }, []);
 
   const onElementDragEnd = useCallback(
     (id: string, e: Konva.KonvaEventObject<DragEvent>) => {
+      justDraggedRef.current = true; // 忽略拖动结束后可能触发的 click
       const node = e.target;
-      const dx = node.x();
-      const dy = node.y();
       const cur = elementsRef.current;
       const target = cur.find((el) => el.id === id);
       if (!target) return;
       let next: WBElement[];
-      if (target.type === "path") {
-        // path 的 Konva 节点 x/y 默认为 0，drag 后产生偏移：并入 points 再归零
-        next = cur.map((el) =>
-          el.id === id && el.type === "path"
-            ? {
+      switch (target.type) {
+        case "rect":
+        case "text": {
+          // Konva 拖拽后 node.x()/y() 已经是「新位置」（原位置+位移），直接用
+          next = cur.map((el) =>
+            el.id === id && (el.type === "rect" || el.type === "text")
+              ? { ...el, x: node.x(), y: node.y() }
+              : el,
+          );
+          break;
+        }
+        case "ellipse": {
+          // 渲染时节点中心 = el.x + w/2，故新位置 = node.x() - w/2
+          next = cur.map((el) =>
+            el.id === id && el.type === "ellipse"
+              ? { ...el, x: node.x() - el.w / 2, y: node.y() - el.h / 2 }
+              : el,
+          );
+          break;
+        }
+        default: {
+          // path/arrow/line：节点原点在 (0,0)，x/y 即位移量，并入 points 后归零
+          const dx = node.x();
+          const dy = node.y();
+          next = cur.map((el) => {
+            if (el.id !== id) return el;
+            if (el.type === "path")
+              return {
                 ...el,
                 points: el.points.map((v, i) => v + (i % 2 === 0 ? dx : dy)),
-              }
-            : el,
-        );
-        node.position({ x: 0, y: 0 });
-      } else {
-        // rect/ellipse/arrow/line/text：Konva 节点 x/y 即语义位置（rect/ellipse 由渲染公式换算）
-        next = cur.map((el) => {
-          if (el.id !== id) return el;
-          switch (el.type) {
-            case "rect":
-            case "ellipse":
-              return { ...el, x: el.x + dx, y: el.y + dy };
-            case "text":
-              return { ...el, x: el.x + dx, y: el.y + dy };
-            case "arrow":
-            case "line":
+              };
+            if (el.type === "arrow" || el.type === "line")
               return {
                 ...el,
                 points: [
@@ -509,11 +712,10 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                   el.points[3] + dy,
                 ] as [number, number, number, number],
               };
-            default:
-              return el;
-          }
-        });
-        node.position({ x: 0, y: 0 });
+            return el;
+          });
+          node.position({ x: 0, y: 0 });
+        }
       }
       commitElements(next);
     },
@@ -582,30 +784,6 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     [commitElements],
   );
 
-  // ---------- 网格 ----------
-
-  const gridLines = useMemo(() => {
-    if (gridMode === "none" || size.w === 0 || size.h === 0) return [];
-    const lines: { points: number[]; key: string }[] = [];
-    const x0 = Math.floor(-view.offsetX / view.scale / GRID_GAP) * GRID_GAP;
-    const x1 = (size.w - view.offsetX) / view.scale + GRID_GAP;
-    const y0 = Math.floor(-view.offsetY / view.scale / GRID_GAP) * GRID_GAP;
-    const y1 = (size.h - view.offsetY) / view.scale + GRID_GAP;
-    if (gridMode === "lines") {
-      for (let x = x0; x <= x1; x += GRID_GAP)
-        lines.push({ key: `v${x}`, points: [x, y0, x, y1] });
-      for (let y = y0; y <= y1; y += GRID_GAP)
-        lines.push({ key: `h${y}`, points: [x0, y, x1, y] });
-    } else {
-      for (let x = x0; x <= x1; x += GRID_GAP)
-        for (let y = y0; y <= y1; y += GRID_GAP)
-          lines.push({ key: `d${x},${y}`, points: [x, y, x + 0.1, y] });
-    }
-    return lines;
-  }, [gridMode, size, view]);
-
-  const gridColor = WB_GRID_COLORS[theme];
-
   // 草稿预览元素
   const draftElement: WBElement | null = useMemo(() => {
     if (!draft) return null;
@@ -637,7 +815,29 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     return { ...base, type: "arrow", points: [x0, y0, x1, y1] };
   }, [draft, color, width]);
 
-  const interactive = tool === "select" && !panning;
+  // 工具 → 快捷键反推表（tooltip 用；绑定可配置，提示随动）
+  const toolKeys = useMemo(() => {
+    const out: Partial<Record<WBTool, string>> = {};
+    for (const [key, t] of Object.entries(bindings.tools)) out[t] = key;
+    return out;
+  }, [bindings.tools]);
+
+  // 交互模型（§5.4，2026-09-21 用户定）：
+  // - 绘制态（画笔/矩形/圆形/箭头/文本）：只绘制，任何元素都不可拖动
+  //   （修掉"画笔写字时误拖已有笔画"）
+  // - 选择态：点击元素出现边框（选中）后，该元素才可拖动/缩放；再次点击文本进入编辑
+  const selectable = tool === "select" && !panning;
+
+  // 元素 hover 光标反馈（仅"已选中、可拖动"时显示 move）
+  const onHoverCursor = useCallback((cursor: string) => {
+    const container = stageRef.current?.container();
+    if (container) container.style.cursor = cursor;
+  }, []);
+
+  // 工具/选中态变化时复位光标，避免取消选中后残留 move 光标
+  useEffect(() => {
+    onHoverCursor("");
+  }, [tool, selectedId, onHoverCursor]);
 
   return (
     <>
@@ -645,6 +845,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         <WhiteboardToolbar
           tool={tool}
           onToolChange={setTool}
+          toolKeys={toolKeys}
           canUndo={historyTick >= 0 && historyRef.current.canUndo()}
           canRedo={historyTick >= 0 && historyRef.current.canRedo()}
           onUndo={undo}
@@ -694,40 +895,43 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
+            onContextMenu={onContextMenu}
+            onDblClick={onTextDoubleClick}
           >
             <Layer listening={false}>
-              {gridMode !== "none" &&
-                gridLines.map((l) => (
-                  <Line
-                    key={l.key}
-                    points={l.points}
-                    stroke={gridColor}
-                    strokeWidth={gridMode === "dots" ? 2 : 1}
-                    lineCap="round"
-                    perfectDrawEnabled={false}
-                  />
-                ))}
+              <GridShape
+                theme={theme}
+                gridMode={gridMode}
+                view={view}
+                size={size}
+              />
             </Layer>
             <Layer>
-              {elements.map((el) => (
-                <ElementNode
-                  key={el.id}
-                  el={el}
-                  theme={theme}
-                  interactive={interactive}
-                  nodeRef={registerNode}
-                  onSelect={onSelect}
-                  onDragEnd={onElementDragEnd}
-                  onTransformEnd={onElementTransformEnd}
-                />
-              ))}
+              {elements
+                .filter((el) => el.id !== editingId) // 编辑中的文本由 textarea 呈现，节点隐藏
+                .map((el) => (
+                  <ElementNode
+                    key={el.id}
+                    el={el}
+                    theme={theme}
+                    movable={selectable && el.id === selectedId}
+                    selectable={selectable}
+                    nodeRef={registerNode}
+                    onSelect={onSelect}
+                    onHoverCursor={onHoverCursor}
+                    onDragEnd={onElementDragEnd}
+                    onTransformEnd={onElementTransformEnd}
+                  />
+                ))}
               {draftElement && (
                 <ElementNode
                   el={draftElement}
                   theme={theme}
-                  interactive={false}
+                  movable={false}
+                  selectable={false}
                   nodeRef={() => {}}
                   onSelect={() => {}}
+                  onHoverCursor={() => {}}
                   onDragEnd={() => {}}
                   onTransformEnd={() => {}}
                 />
@@ -749,6 +953,20 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         >
           {Math.round(view.scale * 100)}%
         </button>
+        {editingId &&
+          (() => {
+            const el = elements.find((x) => x.id === editingId);
+            if (!el || el.type !== "text") return null;
+            return (
+              <TextEditor
+                el={el}
+                theme={theme}
+                view={view}
+                onCommit={(text) => finishTextEdit(editingId, text, true)}
+                onCancel={() => finishTextEdit(editingId, "", false)}
+              />
+            );
+          })()}
         {confirmClear && (
           <div className="la-wb-confirm">
             <span>清空当前画布？此操作可用撤销恢复。</span>

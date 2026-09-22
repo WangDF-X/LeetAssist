@@ -8,6 +8,8 @@ export type WBTool = "select" | "pen" | "rect" | "ellipse" | "arrow" | "text";
 export interface ToolbarProps {
   tool: WBTool;
   onToolChange: (t: WBTool) => void;
+  /** 工具 → 快捷键提示（由 bindings.tools 反推，配置可改则提示随动） */
+  toolKeys: Partial<Record<WBTool, string>>;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -15,18 +17,19 @@ export interface ToolbarProps {
   onClear: () => void;
 }
 
-const TOOLS: { id: WBTool; label: string; key: string }[] = [
-  { id: "select", label: "选择", key: "V" },
-  { id: "pen", label: "画笔", key: "P" },
-  { id: "rect", label: "矩形", key: "R" },
-  { id: "ellipse", label: "圆形", key: "O" },
-  { id: "arrow", label: "箭头", key: "A" },
-  { id: "text", label: "文本", key: "T" },
+const TOOLS: { id: WBTool; label: string }[] = [
+  { id: "select", label: "选择" },
+  { id: "pen", label: "画笔" },
+  { id: "rect", label: "矩形" },
+  { id: "ellipse", label: "圆形" },
+  { id: "arrow", label: "箭头" },
+  { id: "text", label: "文本" },
 ];
 
 export function WhiteboardToolbar({
   tool,
   onToolChange,
+  toolKeys,
   canUndo,
   canRedo,
   onUndo,
@@ -35,18 +38,21 @@ export function WhiteboardToolbar({
 }: ToolbarProps) {
   return (
     <>
-      {TOOLS.map((t) => (
-        <button
-          key={t.id}
-          className="la-wb-tool"
-          data-active={tool === t.id}
-          title={`${t.label}（${t.key}）`}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => onToolChange(t.id)}
-        >
-          {t.label}
-        </button>
-      ))}
+      {TOOLS.map((t) => {
+        const key = toolKeys[t.id];
+        return (
+          <button
+            key={t.id}
+            className="la-wb-tool"
+            data-active={tool === t.id}
+            title={key ? `${t.label}（${key.toUpperCase()}）` : t.label}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onToolChange(t.id)}
+          >
+            {t.label}
+          </button>
+        );
+      })}
       <span className="la-wb-sep" />
       <button
         className="la-wb-tool"
