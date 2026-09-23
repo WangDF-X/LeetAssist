@@ -861,6 +861,15 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         }
       });
       node.scale({ x: 1, y: 1 });
+      // path/arrow/line：上面已把变换位移（node.x()/y()）并入 points（绝对坐标），
+      // 必须把节点位移归零——否则重渲染时 points 与残留位移叠加，图形整体偏移（位置漂移）。
+      // rect/ellipse/text 的 x/y 即元素坐标本身，不能归零。
+      if (
+        target.type === "path" ||
+        target.type === "arrow" ||
+        target.type === "line"
+      )
+        node.position({ x: 0, y: 0 });
       commitElements(next);
     },
     [commitElements],

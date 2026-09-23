@@ -238,3 +238,4 @@ interface WhiteboardScene {
 | 2026-09-22 | §5.4 拖动模型修正（上一条的过界回归）：禁拖仅限**画笔态**；矩形/圆形/箭头/文本态恢复"按住已有图形直接拖动"（边缘热区/整块），且这些工具新建只在空白处起笔（守卫按工具区分保留）；movable 改分工具判定，Space 平移中一律禁拖 |
 | 2026-09-22 | 新增**图形内文字 label**（§4.2/§4.4/§5.2/§5.4）：rect/ellipse 可选 `label`（+缺省字号 16 的 `labelSize` 预留字段），节点=单元素；三编辑入口（画完自动/双击/选择态再点），空提交仅删 label，超框自动撑大；§4.4 补 `getElementBounds`/`estimateTextSize` 统一几何 seam（为连线锚点、图元库预留，避免日后重构） |
 | 2026-09-22 | §5.4 选中模型放宽：**除画笔外任意工具单击图形即选中**（出边框+缩放手柄，绘制态与选择态一致），可直接 `Delete` 删除，免去"切选择态才能删"；绘制态编辑仍走双击、第二次单击只重新选中；元素拖动加 `dragDistance=3px` 阈值（小抖动算点击）；点空白清除选中改为全工具通用 |
+| 2026-09-22 | 修复"缩放 path/arrow/line 导致图形位置漂移"：`onElementTransformEnd` 已把变换位移并入绝对 points，却漏了把节点位移归零（`onElementDragEnd` 有归零、transform 漏），重渲染时 points 与残留位移叠加 → 整体偏移；补 `node.position({x:0,y:0})`（rect/ellipse/text 的 x/y 即元素坐标，不归零）。详见 record/problem-in-develop.md |
