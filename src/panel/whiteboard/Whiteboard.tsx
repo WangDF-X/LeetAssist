@@ -1,6 +1,7 @@
 // 画板画布容器（plan/03-whiteboard §5）：
 // - 三层架构：背景层（网格）/ 绘制层（手绘，可交互）/ 覆盖层（程序化，留门）
 // - 六工具：选择/画笔/矩形/圆形/箭头/文本；拖拽绘制、选中变换（Transformer 仅缩放）
+// - 图形内文字 label：rect/ellipse 带居中文字（节点=单元素，§4.2），三入口编辑+超框自动撑大
 // - 撤销/重做（快照栈 50 步）；清空二次确认；快捷键 hover 门控（§5.2）
 // - 滚轮缩放（光标中心 0.1–4）；Space+拖动平移；ResizeObserver 尺寸跟随
 import {
@@ -19,6 +20,7 @@ import {
   Arrow,
   Text,
   Shape,
+  Group,
   Transformer,
 } from "react-konva";
 import type Konva from "konva";
@@ -26,7 +28,7 @@ import simplify from "simplify-js";
 import type { ResolvedTheme, GridMode, WBColorId, WBWidthId } from "../theme";
 import { WB_COLORS, WB_WIDTHS, WB_GRID_COLORS } from "../theme";
 import type { WBElement, WBTextElement, WBViewState } from "./model";
-import { genId } from "./model";
+import { genId, growShapeForLabel, LABEL_DEFAULT_SIZE } from "./model";
 import { HistoryStack } from "./HistoryStack";
 import {
   DEFAULT_BINDINGS,
@@ -45,6 +47,7 @@ const MIN_SCALE = 0.1;
 const MAX_SCALE = 4;
 const GRID_GAP = 24;
 const MIN_DRAG = 3; // 世界坐标下小于该位移视为误触，不生成图形
+const DRAG_DISTANCE = 3; // 元素拖动阈值：小于该屏幕位移视为"点击"（选中），避免手抖变拖动
 
 /** 背景网格：单个 Shape + sceneFunc 直接 canvas 绘制（替代每点一个节点——
  *  缩小到 20% 时可见世界范围扩大 25 倍，节点数会爆炸到 2 万+ 卡死渲染）。
@@ -119,6 +122,9 @@ interface DraftState {
   points: number[]; // pen: 累积点; rect/ellipse/arrow: [x0,y0,x1,y1]
 }
 
+/** 编辑目标：独立文本 or 图形内 label（§5.4 两套编辑语义） */
+type EditTarget = { kind: "text" | "label"; id: string };
+
 function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 }
@@ -134,6 +140,7 @@ function ElementNode({
   theme,
   movable,
   selectable,
+  hideLabel,
   nodeRef,
   onSelect,
   onHoverCursor,
@@ -144,6 +151,8 @@ function ElementNode({
   theme: ResolvedTheme;
   movable: boolean;
   selectable: boolean;
+  /** label 编辑中：图形保留、图形内文字隐藏（textarea 覆盖其上，§5.4） */
+  hideLabel: boolean;
   nodeRef: (id: string, node: Konva.Node | null) => void;
   onSelect: (id: string) => void;
   onHoverCursor: (cursor: string) => void;
@@ -156,6 +165,7 @@ function ElementNode({
     id: el.id,
     ref: (n: Konva.Node | null) => nodeRef(el.id, n),
     draggable: movable,
+    dragDistance: DRAG_DISTANCE, // 小抖动算点击（可选中），超过阈值才算拖动
     onClick: () => selectable && onSelect(el.id),
     onTap: () => selectable && onSelect(el.id),
     onMouseEnter: movable ? () => onHoverCursor("move") : undefined,
@@ -179,30 +189,58 @@ function ElementNode({
           hitStrokeWidth={Math.max(strokeWidth, 12)}
         />
       );
-    case "rect":
+    case "rect": {
+      const label = !hideLabel && el.label && el.label.trim() !== "" ? el.label : null;
       return (
-        <Rect
-          {...common}
-          x={el.x}
-          y={el.y}
-          width={el.w}
-          height={el.h}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
-        />
+        <Group {...common} x={el.x} y={el.y}>
+          <Rect
+            width={el.w}
+            height={el.h}
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+          />
+          {label && (
+            <Text
+              width={el.w}
+              height={el.h}
+              align="center"
+              verticalAlign="middle"
+              text={label}
+              fontSize={el.labelSize ?? LABEL_DEFAULT_SIZE}
+              fill={stroke}
+              listening={false}
+            />
+          )}
+        </Group>
       );
-    case "ellipse":
+    }
+    case "ellipse": {
+      const label = !hideLabel && el.label && el.label.trim() !== "" ? el.label : null;
       return (
-        <Ellipse
-          {...common}
-          x={el.x + el.w / 2}
-          y={el.y + el.h / 2}
-          radiusX={el.w / 2}
-          radiusY={el.h / 2}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
-        />
+        <Group {...common} x={el.x} y={el.y}>
+          <Ellipse
+            x={el.w / 2}
+            y={el.h / 2}
+            radiusX={el.w / 2}
+            radiusY={el.h / 2}
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+          />
+          {label && (
+            <Text
+              width={el.w}
+              height={el.h}
+              align="center"
+              verticalAlign="middle"
+              text={label}
+              fontSize={el.labelSize ?? LABEL_DEFAULT_SIZE}
+              fill={stroke}
+              listening={false}
+            />
+          )}
+        </Group>
       );
+    }
     case "arrow":
       return (
         <Arrow
@@ -258,7 +296,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const [color, setColor] = useState<WBColorId>("default");
   const [width, setWidth] = useState<WBWidthId>("medium");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null); // 正在编辑文本的元素 id
+  const [editing, setEditing] = useState<EditTarget | null>(null); // 正在编辑的文本/label 目标
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [panning, setPanning] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -297,10 +335,11 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     tr.nodes(node ? [node] : []);
   }, [selectedId, elements]);
 
-  // 切工具时取消选中/草稿
+  // 切工具时取消选中/草稿/编辑
   useEffect(() => {
     setSelectedId(null);
     setDraft(null);
+    setEditing(null);
   }, [tool]);
 
   // 容器尺寸跟随（布局尺寸 contentRect，避免开场动画 transform 干扰）
@@ -331,6 +370,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     if (prev) {
       setElements(prev);
       setSelectedId(null);
+      setEditing(null);
       setHistoryTick((t) => t + 1);
     }
   }, []);
@@ -340,6 +380,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     if (next) {
       setElements(next);
       setSelectedId(null);
+      setEditing(null);
       setHistoryTick((t) => t + 1);
     }
   }, []);
@@ -349,6 +390,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     if (!id) return;
     commitElements(elementsRef.current.filter((el) => el.id !== id));
     setSelectedId(null);
+    setEditing(null);
   }, [commitElements]);
 
   // ---------- 快捷键（§5.2 hover 门控；绑定来自 bindings.ts 配置，不写死） ----------
@@ -454,10 +496,11 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       const w = toWorld(pointer);
       const t = toolRef.current;
 
+      // 点空白处清除选中（所有工具通用；绘制工具随后照常起笔新建）
+      if (e.target === stage) setSelectedId(null);
+
       if (t === "select") {
-        // 点空白处取消选中（点中元素由 ElementNode.onClick 处理）
-        if (e.target === stage) setSelectedId(null);
-        return;
+        return; // 点中元素由 ElementNode.onClick 处理
       }
       if (t === "text") {
         // 文本工具：点击处创建文本元素并立即进入编辑（§5.1）
@@ -473,7 +516,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
           text: "",
         };
         setElements([...elementsRef.current, el]);
-        setEditingId(el.id);
+        setEditing({ kind: "text", id: el.id });
         return;
       }
       const type = t as DraftState["type"];
@@ -571,21 +614,34 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       }
     }
     setDraft(null);
-    if (el) commitElements([...elementsRef.current, el]);
+    if (el) {
+      commitElements([...elementsRef.current, el]);
+      // 新画完矩形/椭圆自动进入 label 编辑（§5.2/§5.4；Esc 或空提交则跳过，图形保留）
+      if (el.type === "rect" || el.type === "ellipse")
+        setEditing({ kind: "label", id: el.id });
+    }
   }, [draft, color, width, commitElements]);
 
   // ---------- 文本编辑（§5.1/§5.2：双击已有文本重编、右键快速输入） ----------
 
-  /** 双击文本元素进入编辑：非选择态生效（选择态文本与图形行为一致——只能选中/变换，
-   *  与 §5.4 交互模型统一；2026-09-21 用户定） */
+  /** 双击进入编辑：非选择态生效。文本→改文字；矩形/椭圆→改 label（§5.4）。
+   *  选择态文本/图形走"点击→边框→再点"路径，与此一致。2026-09-22 扩展到 label） */
   const onTextDoubleClick = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
       if (toolRef.current === "select") return;
-      const id = e.target.id();
+      // rect/ellipse 渲染为 Group：命中节点是无 id 子图形，向上找带 id 的祖先
+      let node: Konva.Node | null = e.target;
+      while (node && !node.id()) node = node.getParent() as Konva.Node | null;
+      const id = node?.id();
+      if (!id) return;
       const el = elementsRef.current.find((x) => x.id === id);
-      if (el?.type === "text") {
+      if (!el) return;
+      if (el.type === "text") {
         setSelectedId(null);
-        setEditingId(id);
+        setEditing({ kind: "text", id });
+      } else if (el.type === "rect" || el.type === "ellipse") {
+        setSelectedId(null);
+        setEditing({ kind: "label", id });
       }
     },
     [],
@@ -611,35 +667,64 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         text: "",
       };
       setElements([...elementsRef.current, el]); // 提交时才入历史
-      setEditingId(el.id);
+      setEditing({ kind: "text", id: el.id });
     },
     [panning, toWorld, color, width],
   );
 
-  const finishTextEdit = useCallback(
-    (id: string, text: string, commit: boolean) => {
-      setEditingId(null);
+  /** 编辑完成（§5.4 两套语义）：
+   *  - 独立文本：空提交=删除元素（新建未提交则静默移除不入历史）；
+   *  - 图形 label：空提交=仅移除 label 不删图形；非空提交自动撑大容纳（§4.2） */
+  const finishEdit = useCallback(
+    (target: EditTarget, text: string, commit: boolean) => {
+      setEditing(null);
       const cur = elementsRef.current;
-      const el = cur.find((x) => x.id === id);
-      if (!el || el.type !== "text") return;
-      const isNew = el.text === ""; // 空文本元素只可能处于"新建未提交"态
+      const el = cur.find((x) => x.id === target.id);
+      if (!el) return;
       const trimmed = text.trim();
 
-      if (!commit || trimmed === "") {
-        if (isNew) {
-          // 新建未提交/空内容：静默移除（不入历史）
-          setElements(cur.filter((x) => x.id !== id));
-        } else if (commit && trimmed === "") {
-          // 旧文本被清空：作为删除提交
-          commitElements(cur.filter((x) => x.id !== id));
+      if (target.kind === "text") {
+        if (el.type !== "text") return;
+        const isNew = el.text === ""; // 空文本元素只可能处于"新建未提交"态
+        if (!commit || trimmed === "") {
+          if (isNew) {
+            // 新建未提交/空内容：静默移除（不入历史）
+            setElements(cur.filter((x) => x.id !== el.id));
+          } else if (commit && trimmed === "") {
+            // 旧文本被清空：作为删除提交
+            commitElements(cur.filter((x) => x.id !== el.id));
+          }
+          // else：取消编辑旧文本，无变化
+          return;
         }
-        // else：取消编辑旧文本，无变化
+        // 提交非空文本（新建首次提交 / 旧文本修改统一走这里）
+        commitElements(
+          cur.map((x) =>
+            x.id === el.id && x.type === "text" ? { ...x, text: trimmed } : x,
+          ),
+        );
         return;
       }
-      // 提交非空文本（新建首次提交 / 旧文本修改统一走这里）
+
+      // kind === "label"
+      if (el.type !== "rect" && el.type !== "ellipse") return;
+      if (!commit || trimmed === "") {
+        // 取消：无变化；空提交：只移除 label，不删图形
+        if (commit && trimmed === "" && el.label)
+          commitElements(
+            cur.map((x) =>
+              x.id === el.id && (x.type === "rect" || x.type === "ellipse")
+                ? { ...x, label: undefined }
+                : x,
+            ),
+          );
+        return;
+      }
       commitElements(
         cur.map((x) =>
-          x.id === id && x.type === "text" ? { ...x, text: trimmed } : x,
+          x.id === el.id && (x.type === "rect" || x.type === "ellipse")
+            ? growShapeForLabel({ ...x, label: trimmed }, trimmed)
+            : x,
         ),
       );
     },
@@ -647,18 +732,22 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   );
 
   const onSelect = useCallback((id: string) => {
-    if (toolRef.current !== "select") return;
-    // 拖动结束后的 click 忽略，避免"拖完误进入文本编辑"
+    if (toolRef.current === "pen") return; // 画笔态不选中（避免与起笔冲突）
+    // 拖动结束后的 click 忽略，避免"拖完误改选中/误进入编辑"
     if (justDraggedRef.current) {
       justDraggedRef.current = false;
       return;
     }
-    if (selectedRef.current === id) {
-      // 已选中（边框已显示）再次点击：文本进入编辑；图形保持选中（无编辑动作）
+    // 仅选择态：已选中（边框已显示）再次点击 → 进入编辑（§5.4）
+    // 绘制态编辑走双击，这里一律只做"选中"（供 Delete 删除）
+    if (toolRef.current === "select" && selectedRef.current === id) {
       const el = elementsRef.current.find((x) => x.id === id);
-      if (el?.type === "text") {
+      if (!el) return;
+      if (el.type === "text") {
         setSelectedId(null);
-        setEditingId(id);
+        setEditing({ kind: "text", id });
+      } else if (el.type === "rect" || el.type === "ellipse") {
+        setEditing({ kind: "label", id }); // 保持选中，编辑框覆盖在图形中心
       }
       return;
     }
@@ -675,20 +764,14 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       let next: WBElement[];
       switch (target.type) {
         case "rect":
+        case "ellipse":
         case "text": {
-          // Konva 拖拽后 node.x()/y() 已经是「新位置」（原位置+位移），直接用
+          // rect/ellipse 渲染为 Group（原点在左上角 el.x/el.y）、text 同为左上角，
+          // Konva 拖拽后 node.x()/y() 即新位置，直接用（ellipse 不再中心偏移）
           next = cur.map((el) =>
-            el.id === id && (el.type === "rect" || el.type === "text")
+            el.id === id &&
+            (el.type === "rect" || el.type === "ellipse" || el.type === "text")
               ? { ...el, x: node.x(), y: node.y() }
-              : el,
-          );
-          break;
-        }
-        case "ellipse": {
-          // 渲染时节点中心 = el.x + w/2，故新位置 = node.x() - w/2
-          next = cur.map((el) =>
-            el.id === id && el.type === "ellipse"
-              ? { ...el, x: node.x() - el.w / 2, y: node.y() - el.h / 2 }
               : el,
           );
           break;
@@ -736,7 +819,9 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       const next = elementsRef.current.map((el): WBElement => {
         if (el.id !== id) return el;
         switch (el.type) {
-          case "rect": {
+          case "rect":
+          case "ellipse": {
+            // Group 原点=左上角，缩放直接乘 w/h（label 子节点尺寸随组缩放，提交后归一）
             return {
               ...el,
               x: node.x(),
@@ -744,11 +829,6 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
               w: Math.max(1, el.w * sx),
               h: Math.max(1, el.h * sy),
             };
-          }
-          case "ellipse": {
-            const w = Math.max(1, el.w * sx);
-            const h = Math.max(1, el.h * sy);
-            return { ...el, x: node.x() - w / 2, y: node.y() - h / 2, w, h };
           }
           case "path": {
             return {
@@ -824,13 +904,13 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     return out;
   }, [bindings.tools]);
 
-  // 交互模型（§5.4，2026-09-22 用户修正版）：
-  // - 画笔态：任何元素不可拖（修"画笔写字误拖已有笔画"），且起笔可落在已有图形上
-  // - 其他绘制工具（矩形/圆形/箭头/文本）：已有图形可直接拖动（线条类走 12px 边缘
-  //   热区、文本整块区域）；新建只在空白处按下才起笔（onPointerDown 守卫让位给拖动）
-  // - 选择态：点击元素出现边框（选中）后，该元素才可拖动/缩放；再次点击文本进入编辑
-  // - Space 平移中一律禁拖
-  const selectable = tool === "select" && !panning;
+  // 交互模型（§5.4，2026-09-22 用户定稿）：
+  // - 画笔态：任何元素不可拖、不可选（修"画笔写字误拖已有笔画"），起笔可落在已有图形上
+  // - 其他工具（矩形/圆形/箭头/文本/选择）：单击图形即选中（出边框），选中后可拖动/拖手柄缩放；
+  //   绘制工具在空白处按下仍起笔新建，命中已有图形则让位给选中/拖动
+  // - 编辑：选择态"点击→边框→再点"进入；绘制态双击进入（§5.2）
+  // - Space 平移中一律禁拖/禁选
+  const selectable = tool !== "pen" && !panning;
   const movableOf = (id: string) =>
     panning || tool === "pen"
       ? false
@@ -918,7 +998,11 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
             </Layer>
             <Layer>
               {elements
-                .filter((el) => el.id !== editingId) // 编辑中的文本由 textarea 呈现，节点隐藏
+                .filter(
+                  (el) =>
+                    // 编辑中的独立文本由 textarea 呈现，隐藏节点；label 编辑保留图形
+                    !(editing?.kind === "text" && el.id === editing.id),
+                )
                 .map((el) => (
                   <ElementNode
                     key={el.id}
@@ -926,6 +1010,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                     theme={theme}
                     movable={movableOf(el.id)}
                     selectable={selectable}
+                    hideLabel={!!editing && editing.kind === "label" && editing.id === el.id}
                     nodeRef={registerNode}
                     onSelect={onSelect}
                     onHoverCursor={onHoverCursor}
@@ -939,6 +1024,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                   theme={theme}
                   movable={false}
                   selectable={false}
+                  hideLabel={false}
                   nodeRef={() => {}}
                   onSelect={() => {}}
                   onHoverCursor={() => {}}
@@ -963,19 +1049,44 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         >
           {Math.round(view.scale * 100)}%
         </button>
-        {editingId &&
+        {editing &&
           (() => {
-            const el = elements.find((x) => x.id === editingId);
-            if (!el || el.type !== "text") return null;
-            return (
-              <TextEditor
-                el={el}
-                theme={theme}
-                view={view}
-                onCommit={(text) => finishTextEdit(editingId, text, true)}
-                onCancel={() => finishTextEdit(editingId, "", false)}
-              />
-            );
+            const el = elements.find((x) => x.id === editing.id);
+            if (!el) return null;
+            // 独立文本
+            if (editing.kind === "text" && el.type === "text")
+              return (
+                <TextEditor
+                  key={"t-" + el.id}
+                  theme={theme}
+                  view={view}
+                  x={el.x}
+                  y={el.y}
+                  fontSize={el.size ?? 16}
+                  colorId={el.color}
+                  initial={el.text}
+                  onCommit={(text) => finishEdit(editing, text, true)}
+                  onCancel={() => finishEdit(editing, "", false)}
+                />
+              );
+            // 图形内 label（居中于框内）
+            if (editing.kind === "label" && (el.type === "rect" || el.type === "ellipse"))
+              return (
+                <TextEditor
+                  key={"l-" + el.id}
+                  theme={theme}
+                  view={view}
+                  x={el.x}
+                  y={el.y}
+                  box={{ w: el.w, h: el.h }}
+                  fontSize={el.labelSize ?? LABEL_DEFAULT_SIZE}
+                  colorId={el.color}
+                  initial={el.label ?? ""}
+                  onCommit={(text) => finishEdit(editing, text, true)}
+                  onCancel={() => finishEdit(editing, "", false)}
+                />
+              );
+            return null;
           })()}
         {confirmClear && (
           <div className="la-wb-confirm">

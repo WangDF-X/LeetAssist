@@ -17,19 +17,25 @@ export interface WBPathElement extends WBElementBase {
   type: "path";
   points: number[]; // [x1,y1,x2,y2,...]
 }
+/** 矩形：x,y = 左上角。label = 图形内文字（居中渲染，§4.2 2026-09-22） */
 export interface WBRectElement extends WBElementBase {
   type: "rect";
   x: number;
   y: number;
   w: number;
   h: number;
+  label?: string;
+  labelSize?: number; // 缺省 16；V1 无 UI 修改，纯增量预留
 }
+/** 椭圆：x,y = 外接框左上角（与 rect 参数形态一致，降低 LLM 记忆负担） */
 export interface WBEllipseElement extends WBElementBase {
   type: "ellipse";
   x: number;
   y: number;
   w: number;
   h: number;
+  label?: string;
+  labelSize?: number;
 }
 export interface WBArrowElement extends WBElementBase {
   type: "arrow";
@@ -164,6 +170,22 @@ function toBox(raw: Record<string, unknown>) {
   };
 }
 
+const MAX_LABEL_LEN = 200;
+
+/** label 清洗（§4.2 2026-09-22）：非字符串剥离字段不丢元素；空/纯空白视为无 label */
+function toLabelProps(raw: Record<string, unknown>): {
+  label?: string;
+  labelSize?: number;
+} {
+  if (typeof raw.label !== "string") return {};
+  const label = raw.label.slice(0, MAX_LABEL_LEN);
+  if (label.trim() === "") return {};
+  const size = num(raw.labelSize)
+    ? clampNum(Math.round(raw.labelSize), MIN_FONT, MAX_FONT)
+    : undefined;
+  return { label, ...(size !== undefined && { labelSize: size }) };
+}
+
 /**
  * 校验并清洗一组外部元素（§4.4）。
  * @returns elements 合法元素（z 序保持输入顺序）；dropped 被丢弃的数量
@@ -200,7 +222,7 @@ export function sanitizeElements(
           dropped++;
           continue;
         }
-        out.push({ ...base, type: "rect", ...box });
+        out.push({ ...base, type: "rect", ...box, ...toLabelProps(raw) });
         break;
       }
       case "ellipse": {
@@ -209,7 +231,7 @@ export function sanitizeElements(
           dropped++;
           continue;
         }
-        out.push({ ...base, type: "ellipse", ...box });
+        out.push({ ...base, type: "ellipse", ...box, ...toLabelProps(raw) });
         break;
       }
       case "arrow": {
@@ -311,4 +333,98 @@ export function deserializeScene(json: string): SanitizedScene | null {
   } catch {
     return null;
   }
+}
+
+// ---------- 几何 helpers（§4.4 统一 seam） ----------
+// 消费方：label 超框撑大（本轮）、连线端点锚（connector 轮）、图元库预设尺寸（下一轮）。
+// 全部为纯函数，估算度量即可（不做字体精确测量），后续功能不得回头改元素模型。
+
+export const LABEL_DEFAULT_SIZE = 16; // label 缺省字号：与独立文本缺省一致
+export const LABEL_PADDING = 8; // 文字与图形边缘的最小留白（世界 px，单边）
+
+/** 文本尺寸估算：CJK/全角约 1em、其余约 0.6em；高度 = 行数 × 1.35em */
+export function estimateTextSize(
+  text: string,
+  fontSize: number,
+): { w: number; h: number } {
+  const lines = text.length > 0 ? text.split("\n") : [""];
+  let maxW = 0;
+  for (const line of lines) {
+    let w = 0;
+    for (const ch of line)
+      w += (ch.codePointAt(0) ?? 0) > 0x2e7f ? fontSize : fontSize * 0.6;
+    if (w > maxW) maxW = w;
+  }
+  return { w: Math.ceil(maxW), h: Math.ceil(lines.length * fontSize * 1.35) };
+}
+
+export interface WBBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function pointsBounds(points: number[]): WBBox {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i + 1 < points.length; i += 2) {
+    minX = Math.min(minX, points[i]);
+    maxX = Math.max(maxX, points[i]);
+    minY = Math.min(minY, points[i + 1]);
+    maxY = Math.max(maxY, points[i + 1]);
+  }
+  if (!Number.isFinite(minX)) return { x: 0, y: 0, w: 0, h: 0 };
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+/**
+ * 元素包围盒（世界坐标，不含线宽膨胀）。
+ * 连线端点解析、图元对齐等一切"这个图形占多大地方"的问题都从这里取。
+ */
+export function getElementBounds(el: WBElement): WBBox {
+  switch (el.type) {
+    case "rect":
+    case "ellipse":
+      return { x: el.x, y: el.y, w: el.w, h: el.h };
+    case "text": {
+      const s = estimateTextSize(el.text, el.size ?? 16);
+      return { x: el.x, y: el.y, w: s.w, h: s.h };
+    }
+    case "path":
+      return pointsBounds(el.points);
+    case "arrow":
+    case "line": {
+      const [x0, y0, x1, y1] = el.points;
+      return {
+        x: Math.min(x0, x1),
+        y: Math.min(y0, y1),
+        w: Math.abs(x1 - x0),
+        h: Math.abs(y1 - y0),
+      };
+    }
+  }
+}
+
+/**
+ * label 超框撑大（§4.2）：以中心为锚放大 rect/ellipse 直到容纳文字估算尺寸 + padding。
+ * 椭圆按内接矩形折算（系数 1.45 ≈ √2）。无需变化时原样返回（引用不变）。
+ */
+export function growShapeForLabel<T extends WBRectElement | WBEllipseElement>(
+  el: T,
+  label: string,
+): T {
+  const size = el.labelSize ?? LABEL_DEFAULT_SIZE;
+  const t = estimateTextSize(label, size);
+  const f = el.type === "ellipse" ? 1.45 : 1;
+  const minW = t.w * f + LABEL_PADDING * 2;
+  const minH = t.h * f + LABEL_PADDING * 2;
+  if (el.w >= minW && el.h >= minH) return el;
+  const cx = el.x + el.w / 2;
+  const cy = el.y + el.h / 2;
+  const w = Math.max(el.w, minW);
+  const h = Math.max(el.h, minH);
+  return { ...el, x: cx - w / 2, y: cy - h / 2, w, h };
 }
