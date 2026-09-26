@@ -212,7 +212,7 @@ ${THEME_VARS_CSS}
 .la-wb-stage[data-tool="pen"],
 .la-wb-stage[data-tool="rect"],
 .la-wb-stage[data-tool="ellipse"],
-.la-wb-stage[data-tool="arrow"],
+.la-wb-stage[data-tool="connector"],
 .la-wb-stage[data-tool="text"] { cursor: crosshair; }
 /* 文本编辑覆盖层（Konva textarea 方案） */
 .la-wb-texteditor {

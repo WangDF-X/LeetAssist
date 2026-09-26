@@ -2,8 +2,9 @@
 // 纯展示组件，状态由 Whiteboard 容器下传。
 import type { ResolvedTheme, WBColorId, WBWidthId } from "../theme";
 import { WB_COLORS } from "../theme";
+import type { WBArrowhead } from "./model";
 
-export type WBTool = "select" | "pen" | "rect" | "ellipse" | "arrow" | "text";
+export type WBTool = "select" | "pen" | "rect" | "ellipse" | "connector" | "text";
 
 export interface ToolbarProps {
   tool: WBTool;
@@ -22,7 +23,7 @@ const TOOLS: { id: WBTool; label: string }[] = [
   { id: "pen", label: "画笔" },
   { id: "rect", label: "矩形" },
   { id: "ellipse", label: "圆形" },
-  { id: "arrow", label: "箭头" },
+  { id: "connector", label: "连线" },
   { id: "text", label: "文本" },
 ];
 
@@ -85,13 +86,17 @@ export function WhiteboardToolbar({
   );
 }
 
-// 颜色/线宽属性条（仅绘图/文本工具激活时显示，§5.1）
+// 颜色/线宽属性条（绘图/文本/连线工具激活，或选中连线时显示，§5.1）
 export interface AttrBarProps {
   theme: ResolvedTheme;
   color: WBColorId;
   onColorChange: (c: WBColorId) => void;
   width: WBWidthId;
   onWidthChange: (w: WBWidthId) => void;
+  /** 连线工具激活或选中连线时，追加箭头样式选择器 */
+  showArrowhead: boolean;
+  arrowhead: WBArrowhead;
+  onArrowheadChange: (a: WBArrowhead) => void;
 }
 
 const COLOR_LABEL: Record<WBColorId, string> = {
@@ -108,8 +113,23 @@ const WIDTH_LABEL: Record<WBWidthId, string> = {
   thick: "粗",
 };
 
+const ARROWHEAD_LABEL: Record<WBArrowhead, string> = {
+  none: "无箭头",
+  start: "反向箭头（起点）",
+  end: "正向箭头（终点）",
+  both: "双向箭头",
+};
+
+const ARROWHEAD_TEXT: Record<WBArrowhead, string> = {
+  none: "无",
+  start: "←",
+  end: "→",
+  both: "↔",
+};
+
 const COLOR_ORDER: WBColorId[] = ["default", "red", "blue", "green", "orange"];
 const WIDTH_ORDER: WBWidthId[] = ["thin", "medium", "thick"];
+const ARROWHEAD_ORDER: WBArrowhead[] = ["none", "end", "start", "both"];
 
 export function WhiteboardAttrBar({
   theme,
@@ -117,6 +137,9 @@ export function WhiteboardAttrBar({
   onColorChange,
   width,
   onWidthChange,
+  showArrowhead,
+  arrowhead,
+  onArrowheadChange,
 }: AttrBarProps) {
   return (
     <div className="la-wb-attrbar" onPointerDown={(e) => e.stopPropagation()}>
@@ -142,6 +165,22 @@ export function WhiteboardAttrBar({
           {WIDTH_LABEL[w]}
         </button>
       ))}
+      {showArrowhead && (
+        <>
+          <span className="la-wb-sep" />
+          {ARROWHEAD_ORDER.map((a) => (
+            <button
+              key={a}
+              className="la-wb-width"
+              data-active={arrowhead === a}
+              title={ARROWHEAD_LABEL[a]}
+              onClick={() => onArrowheadChange(a)}
+            >
+              {ARROWHEAD_TEXT[a]}
+            </button>
+          ))}
+        </>
+      )}
     </div>
   );
 }

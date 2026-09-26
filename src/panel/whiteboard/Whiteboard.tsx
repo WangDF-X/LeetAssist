@@ -21,14 +21,36 @@ import {
   Text,
   Shape,
   Group,
+  Circle,
   Transformer,
 } from "react-konva";
 import type Konva from "konva";
 import simplify from "simplify-js";
 import type { ResolvedTheme, GridMode, WBColorId, WBWidthId } from "../theme";
-import { WB_COLORS, WB_WIDTHS, WB_GRID_COLORS } from "../theme";
-import type { WBElement, WBTextElement, WBViewState } from "./model";
-import { genId, growShapeForLabel, LABEL_DEFAULT_SIZE } from "./model";
+import {
+  WB_COLORS,
+  WB_WIDTHS,
+  WB_GRID_COLORS,
+  WB_CANVAS_BG,
+} from "../theme";
+import type {
+  WBArrowhead,
+  WBBox,
+  WBConnectorElement,
+  WBElement,
+  WBTextElement,
+  WBViewState,
+} from "./model";
+import {
+  genId,
+  growShapeForLabel,
+  LABEL_DEFAULT_SIZE,
+  getElementBounds,
+  estimateTextSize,
+  isBindable,
+  resolveConnectorPoints,
+  bboxBoundaryPoint,
+} from "./model";
 import { HistoryStack } from "./HistoryStack";
 import {
   DEFAULT_BINDINGS,
@@ -48,6 +70,8 @@ const MAX_SCALE = 4;
 const GRID_GAP = 24;
 const MIN_DRAG = 3; // 世界坐标下小于该位移视为误触，不生成图形
 const DRAG_DISTANCE = 3; // 元素拖动阈值：小于该屏幕位移视为"点击"（选中），避免手抖变拖动
+const HANDLE_R = 5; // 连线端点手柄半径（屏幕 px，除 view.scale 保持视觉恒定）
+const BIND_MARGIN = 14; // 连线绑定命中容差（世界 px）：不必严格落在图形内，靠近边缘即可绑定
 
 /** 背景网格：单个 Shape + sceneFunc 直接 canvas 绘制（替代每点一个节点——
  *  缩小到 20% 时可见世界范围扩大 25 倍，节点数会爆炸到 2 万+ 卡死渲染）。
@@ -116,14 +140,23 @@ interface Size {
 }
 
 interface DraftState {
-  type: "pen" | "rect" | "ellipse" | "arrow";
+  type: "pen" | "rect" | "ellipse" | "connector";
   startX: number;
   startY: number;
-  points: number[]; // pen: 累积点; rect/ellipse/arrow: [x0,y0,x1,y1]
+  points: number[]; // pen: 累积点; rect/ellipse/connector: [x0,y0,x1,y1]
+  fromId?: string; // connector：起点绑定的图形 id（undefined = 自由起点）
 }
 
-/** 编辑目标：独立文本 or 图形内 label（§5.4 两套编辑语义） */
+/** 编辑目标：独立文本 or 图形/连线 label（§5.4 编辑语义） */
 type EditTarget = { kind: "text" | "label"; id: string };
+
+/** 正在拖动的连线端点（端点重绑定，§5.4） */
+interface EndpointDrag {
+  connectorId: string;
+  end: "from" | "to";
+  x: number;
+  y: number;
+}
 
 function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
@@ -141,10 +174,13 @@ function ElementNode({
   movable,
   selectable,
   hideLabel,
+  resolved,
   nodeRef,
   onSelect,
   onHoverCursor,
   onDragEnd,
+  onDragMove,
+  onTransform,
   onTransformEnd,
 }: {
   el: WBElement;
@@ -153,10 +189,14 @@ function ElementNode({
   selectable: boolean;
   /** label 编辑中：图形保留、图形内文字隐藏（textarea 覆盖其上，§5.4） */
   hideLabel: boolean;
+  /** 连线：解析后的端点（绑定端由目标图形包围盒算出）；缺省用 el.points */
+  resolved?: [number, number, number, number];
   nodeRef: (id: string, node: Konva.Node | null) => void;
   onSelect: (id: string) => void;
   onHoverCursor: (cursor: string) => void;
   onDragEnd: (id: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  onDragMove?: (id: string, e: Konva.KonvaEventObject<DragEvent>) => void;
+  onTransform?: (id: string, e: Konva.KonvaEventObject<Event>) => void;
   onTransformEnd: (id: string, e: Konva.KonvaEventObject<Event>) => void;
 }) {
   const stroke = WB_COLORS[el.color][theme];
@@ -170,8 +210,12 @@ function ElementNode({
     onTap: () => selectable && onSelect(el.id),
     onMouseEnter: movable ? () => onHoverCursor("move") : undefined,
     onMouseLeave: movable ? () => onHoverCursor("") : undefined,
+    onDragMove: (e: Konva.KonvaEventObject<DragEvent>) =>
+      movable && onDragMove?.(el.id, e),
     onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) =>
       movable && onDragEnd(el.id, e),
+    onTransform: (e: Konva.KonvaEventObject<Event>) =>
+      selectable && onTransform?.(el.id, e),
     onTransformEnd: (e: Konva.KonvaEventObject<Event>) =>
       selectable && onTransformEnd(el.id, e),
   };
@@ -241,30 +285,59 @@ function ElementNode({
         </Group>
       );
     }
-    case "arrow":
+    case "connector": {
+      const pts = resolved ?? el.points;
+      const size = el.labelSize ?? LABEL_DEFAULT_SIZE;
+      const label =
+        !hideLabel && el.label && el.label.trim() !== "" ? el.label : null;
+      const m = label ? estimateTextSize(label, size) : null;
+      const midX = (pts[0] + pts[2]) / 2;
+      const midY = (pts[1] + pts[3]) / 2;
       return (
-        <Arrow
-          {...common}
-          points={el.points}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
-          fill={stroke}
-          pointerLength={8}
-          pointerWidth={7}
-          hitStrokeWidth={Math.max(strokeWidth, 12)}
-        />
+        <>
+          <Arrow
+            {...common}
+            points={pts}
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+            fill={stroke}
+            pointerLength={8}
+            pointerWidth={7}
+            pointerAtBeginning={
+              el.arrowhead === "start" || el.arrowhead === "both"
+            }
+            pointerAtEnding={el.arrowhead === "end" || el.arrowhead === "both"}
+            hitStrokeWidth={Math.max(strokeWidth, 12)}
+          />
+          {label && m && (
+            <>
+              {/* 标签底：用纸面色盖住穿过文字的连线，等价于"文字处断开连线"，保证可读 */}
+              <Rect
+                x={midX - m.w / 2 - 3}
+                y={midY - m.h / 2 - 1}
+                width={m.w + 6}
+                height={m.h + 2}
+                cornerRadius={3}
+                fill={WB_CANVAS_BG[theme]}
+                listening={false}
+              />
+              <Text
+                x={midX - m.w / 2}
+                y={midY - m.h / 2}
+                width={m.w}
+                height={m.h}
+                align="center"
+                verticalAlign="middle"
+                text={label}
+                fontSize={size}
+                fill={stroke}
+                listening={false}
+              />
+            </>
+          )}
+        </>
       );
-    case "line":
-      return (
-        <Line
-          {...common}
-          points={el.points}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
-          lineCap="round"
-          hitStrokeWidth={Math.max(strokeWidth, 12)}
-        />
-      );
+    }
     case "text":
       return (
         <Text
@@ -295,9 +368,12 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const [tool, setTool] = useState<WBTool>("pen");
   const [color, setColor] = useState<WBColorId>("default");
   const [width, setWidth] = useState<WBWidthId>("medium");
+  const [arrowhead, setArrowhead] = useState<WBArrowhead>("end");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditTarget | null>(null); // 正在编辑的文本/label 目标
   const [draft, setDraft] = useState<DraftState | null>(null);
+  const [snapTargetId, setSnapTargetId] = useState<string | null>(null); // 连线吸附高亮
+  const [epDrag, setEpDrag] = useState<EndpointDrag | null>(null); // 端点重绑定拖动
   const [panning, setPanning] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [historyTick, setHistoryTick] = useState(0); // 驱动撤销/重做按钮可用态
@@ -327,19 +403,94 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     else nodesRef.current.delete(id);
   }, []);
 
-  // Transformer 跟随选中元素（§5.4：仅缩放手柄）
+  // 元素 id 索引 + 连线端点解析（绑定端跟随目标图形）
+  const byId = useMemo(() => {
+    const m = new Map<string, WBElement>();
+    for (const el of elements) m.set(el.id, el);
+    return m;
+  }, [elements]);
+
+  const connectorPoints = useMemo(() => {
+    const m = new Map<string, [number, number, number, number]>();
+    for (const el of elements)
+      if (el.type === "connector") m.set(el.id, resolveConnectorPoints(el, byId));
+    return m;
+  }, [elements, byId]);
+
+  // 选中的元素 / 选中的连线（连线选中改为端点手柄，不出 Transformer）
+  const selectedEl = useMemo(
+    () => (selectedId ? elements.find((e) => e.id === selectedId) ?? null : null),
+    [elements, selectedId],
+  );
+  const editingConnector =
+    selectedEl?.type === "connector" ? selectedEl : null;
+
+  /** 命中检测：世界坐标点落在哪个可绑定图形内（矩形/椭圆/文本，按包围盒 + 容差；取最上层） */
+  const findBindableAt = useCallback(
+    (wx: number, wy: number, excludeId?: string): string | null => {
+      const els = elementsRef.current;
+      const m = BIND_MARGIN;
+      for (let i = els.length - 1; i >= 0; i--) {
+        const el = els[i];
+        if (el.id === excludeId || !isBindable(el)) continue;
+        const b = getElementBounds(el);
+        if (
+          wx >= b.x - m &&
+          wx <= b.x + b.w + m &&
+          wy >= b.y - m &&
+          wy <= b.y + b.h + m
+        )
+          return el.id;
+      }
+      return null;
+    },
+    [],
+  );
+
+  /** 拖动/缩放图形时，命令式实时更新绑定到它的连线端点（不走 state；松手后以数据重渲染） */
+  const updateConnectedConnectors = useCallback((shapeId: string) => {
+    const els = elementsRef.current;
+    const map = new Map<string, WBElement>();
+    for (const e of els) map.set(e.id, e);
+    const boundsOf = (el: WBElement): WBBox => {
+      const node = nodesRef.current.get(el.id);
+      const layer = node?.getLayer();
+      if (node && layer) {
+        const r = node.getClientRect({ relativeTo: layer, skipStroke: true });
+        return { x: r.x, y: r.y, w: r.width, h: r.height };
+      }
+      return getElementBounds(el);
+    };
+    for (const el of els) {
+      if (el.type !== "connector") continue;
+      if (el.connects?.from !== shapeId && el.connects?.to !== shapeId) continue;
+      const pts = resolveConnectorPoints(el, map, boundsOf);
+      const node = nodesRef.current.get(el.id) as Konva.Arrow | undefined;
+      node?.points(pts);
+    }
+  }, []);
+
+  // Transformer 跟随选中元素（§5.4：连线不出缩放手柄）
   useEffect(() => {
     const tr = trRef.current;
     if (!tr) return;
-    const node = selectedId ? nodesRef.current.get(selectedId) : null;
+    const sel = selectedId
+      ? elements.find((e) => e.id === selectedId) ?? null
+      : null;
+    const node =
+      sel && sel.type !== "connector"
+        ? nodesRef.current.get(sel.id) ?? null
+        : null;
     tr.nodes(node ? [node] : []);
   }, [selectedId, elements]);
 
-  // 切工具时取消选中/草稿/编辑
+  // 切工具时取消选中/草稿/编辑/连线临时态
   useEffect(() => {
     setSelectedId(null);
     setDraft(null);
     setEditing(null);
+    setSnapTargetId(null);
+    setEpDrag(null);
   }, [tool]);
 
   // 容器尺寸跟随（布局尺寸 contentRect，避免开场动画 transform 干扰）
@@ -388,7 +539,25 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const deleteSelected = useCallback(() => {
     const id = selectedRef.current;
     if (!id) return;
-    commitElements(elementsRef.current.filter((el) => el.id !== id));
+    const cur = elementsRef.current;
+    const map = new Map<string, WBElement>();
+    for (const e of cur) map.set(e.id, e);
+    // 删除前先"冻结"指向它的连线端点：把该端写死为当前解析坐标，避免删除后回退字面值导致跳变
+    const next = cur
+      .filter((el) => el.id !== id)
+      .map((el): WBElement => {
+        if (el.type !== "connector") return el;
+        if (el.connects?.from !== id && el.connects?.to !== id) return el;
+        const pts = resolveConnectorPoints(el, map);
+        const connects = { ...(el.connects ?? {}) };
+        if (connects.from === id) delete connects.from;
+        if (connects.to === id) delete connects.to;
+        const frozen: WBConnectorElement = { ...el, points: pts };
+        if (!connects.from && !connects.to) delete frozen.connects;
+        else frozen.connects = connects;
+        return frozen;
+      });
+    commitElements(next);
     setSelectedId(null);
     setEditing(null);
   }, [commitElements]);
@@ -519,22 +688,52 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         setEditing({ kind: "text", id: el.id });
         return;
       }
+      if (t === "connector") {
+        // 连线：命中可绑定图形 = 起点绑定；落空白 = 自由起点
+        const fromId = findBindableAt(w.x, w.y) ?? undefined;
+        setDraft({
+          type: "connector",
+          startX: w.x,
+          startY: w.y,
+          points: [w.x, w.y],
+          fromId,
+        });
+        return;
+      }
       const type = t as DraftState["type"];
       // 画笔：一律起笔——即使起点落在已有笔画上（画笔态元素不可拖，无让位问题）
-      // 矩形/圆形/箭头：点中已有元素（非 Stage）时不起笔，让位给该元素的直接拖动
-      // （图形走边缘热区、文本走整块区域；从空白处按下才画新图形，§5.4 分工具规则）
+      // 矩形/圆形：点中已有元素（非 Stage）时不起笔，让位给该元素的直接拖动
       if (type !== "pen" && e.target !== stage) return;
       setDraft({ type, startX: w.x, startY: w.y, points: [w.x, w.y] });
     },
-    [panning, toWorld, color, width],
+    [panning, toWorld, color, width, findBindableAt],
   );
 
   const onPointerMove = useCallback(
     (e: Konva.KonvaEventObject<PointerEvent>) => {
-      if (!draft) return;
       const pointer = stageRef.current?.getPointerPosition();
       if (!pointer) return;
       const w = toWorld(pointer);
+
+      // 端点重绑定拖动：更新手柄位置 + 吸附高亮（排除对端已绑定的图形）
+      if (epDrag) {
+        setEpDrag((d) => (d ? { ...d, x: w.x, y: w.y } : d));
+        const conn = elementsRef.current.find(
+          (x) => x.id === epDrag.connectorId,
+        );
+        const other =
+          conn?.type === "connector"
+            ? epDrag.end === "from"
+              ? conn.connects?.to
+              : conn.connects?.from
+            : undefined;
+        setSnapTargetId(findBindableAt(w.x, w.y, other));
+        return;
+      }
+
+      if (!draft) return;
+      if (draft.type === "connector")
+        setSnapTargetId(findBindableAt(w.x, w.y, draft.fromId));
       setDraft((d) => {
         if (!d) return d;
         if (d.type === "pen") {
@@ -549,13 +748,57 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       });
       void e;
     },
-    [draft, toWorld],
+    [draft, epDrag, toWorld, findBindableAt],
   );
 
   const onPointerUp = useCallback(() => {
+    // 端点重绑定收尾（优先于起笔）
+    if (epDrag) {
+      const d = epDrag;
+      setEpDrag(null);
+      setSnapTargetId(null);
+      const cur = elementsRef.current;
+      const conn = cur.find((x) => x.id === d.connectorId);
+      if (!conn || conn.type !== "connector") return;
+      const other = d.end === "from" ? conn.connects?.to : conn.connects?.from;
+      const targetId = findBindableAt(d.x, d.y, other) ?? undefined;
+      const connects: { from?: string; to?: string } = {
+        ...(conn.connects ?? {}),
+      };
+      if (d.end === "from") {
+        if (targetId) connects.from = targetId;
+        else delete connects.from;
+      } else {
+        if (targetId) connects.to = targetId;
+        else delete connects.to;
+      }
+      const points = [...conn.points] as [number, number, number, number];
+      if (!targetId) {
+        // 自由端才更新字面坐标（绑定端的字面值不参与渲染）
+        if (d.end === "from") {
+          points[0] = d.x;
+          points[1] = d.y;
+        } else {
+          points[2] = d.x;
+          points[3] = d.y;
+        }
+      }
+      const nextConn: WBConnectorElement = { ...conn, points };
+      if (!connects.from && !connects.to) delete nextConn.connects;
+      else nextConn.connects = connects;
+      const same =
+        JSON.stringify(nextConn.connects ?? null) ===
+          JSON.stringify(conn.connects ?? null) &&
+        points.every((v, i) => v === conn.points[i]);
+      if (same) return; // 无变化不写历史
+      commitElements(cur.map((x) => (x.id === conn.id ? nextConn : x)));
+      return;
+    }
+
     if (!draft) return;
     const base = { color, width };
     let el: WBElement | null = null;
+
     if (draft.type === "pen") {
       if (draft.points.length >= 4) {
         // 入库前 simplify-js 抽稀（§4.5）
@@ -578,6 +821,43 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         const bigEnough =
           pts.length >= 4 && Math.max(maxX - minX, maxY - minY) >= 2;
         if (bigEnough) el = { ...base, id: genId(), type: "path", points: pts };
+      }
+    } else if (draft.type === "connector") {
+      const [x0, y0, x1, y1] =
+        draft.points.length === 4
+          ? (draft.points as [number, number, number, number])
+          : ([draft.startX, draft.startY, draft.startX, draft.startY] as [
+              number,
+              number,
+              number,
+              number,
+            ]);
+      const fromId = draft.fromId;
+      const toId = findBindableAt(x1, y1, fromId) ?? undefined;
+      const dist = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      // 统一 MIN_DRAG 门槛：纯点击（未拖动）不生成退化连线
+      if (dist >= MIN_DRAG) {
+        if (!fromId && !toId) {
+          el = {
+            ...base,
+            id: genId(),
+            type: "connector",
+            points: [x0, y0, x1, y1],
+            arrowhead,
+          };
+        } else {
+          const connects: { from?: string; to?: string } = {};
+          if (fromId) connects.from = fromId;
+          if (toId) connects.to = toId;
+          el = {
+            ...base,
+            id: genId(),
+            type: "connector",
+            points: [x0, y0, x1, y1],
+            connects,
+            arrowhead,
+          };
+        }
       }
     } else {
       const [x0, y0, x1, y1] = draft.points;
@@ -604,23 +884,25 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
             w: dx,
             h: dy,
           };
-        else if (draft.type === "arrow")
-          el = {
-            ...base,
-            id: genId(),
-            type: "arrow",
-            points: [x0, y0, x1, y1],
-          };
       }
     }
     setDraft(null);
+    setSnapTargetId(null);
     if (el) {
       commitElements([...elementsRef.current, el]);
       // 新画完矩形/椭圆自动进入 label 编辑（§5.2/§5.4；Esc 或空提交则跳过，图形保留）
       if (el.type === "rect" || el.type === "ellipse")
         setEditing({ kind: "label", id: el.id });
     }
-  }, [draft, color, width, commitElements]);
+  }, [
+    draft,
+    epDrag,
+    color,
+    width,
+    arrowhead,
+    commitElements,
+    findBindableAt,
+  ]);
 
   // ---------- 文本编辑（§5.1/§5.2：双击已有文本重编、右键快速输入） ----------
 
@@ -639,7 +921,11 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       if (el.type === "text") {
         setSelectedId(null);
         setEditing({ kind: "text", id });
-      } else if (el.type === "rect" || el.type === "ellipse") {
+      } else if (
+        el.type === "rect" ||
+        el.type === "ellipse" ||
+        el.type === "connector"
+      ) {
         setSelectedId(null);
         setEditing({ kind: "label", id });
       }
@@ -706,26 +992,35 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         return;
       }
 
-      // kind === "label"
-      if (el.type !== "rect" && el.type !== "ellipse") return;
+      // kind === "label"（图形内文字 / 连线中点文字）
+      const isShape = el.type === "rect" || el.type === "ellipse";
+      const isConn = el.type === "connector";
+      if (!isShape && !isConn) return;
       if (!commit || trimmed === "") {
-        // 取消：无变化；空提交：只移除 label，不删图形
+        // 取消：无变化；空提交：只移除 label，不删元素
         if (commit && trimmed === "" && el.label)
           commitElements(
-            cur.map((x) =>
-              x.id === el.id && (x.type === "rect" || x.type === "ellipse")
-                ? { ...x, label: undefined }
-                : x,
-            ),
+            cur.map((x) => {
+              if (x.id !== el.id) return x;
+              if (
+                x.type === "rect" ||
+                x.type === "ellipse" ||
+                x.type === "connector"
+              )
+                return { ...x, label: undefined };
+              return x;
+            }),
           );
         return;
       }
       commitElements(
-        cur.map((x) =>
-          x.id === el.id && (x.type === "rect" || x.type === "ellipse")
-            ? growShapeForLabel({ ...x, label: trimmed }, trimmed)
-            : x,
-        ),
+        cur.map((x) => {
+          if (x.id !== el.id) return x;
+          if (x.type === "rect" || x.type === "ellipse")
+            return growShapeForLabel({ ...x, label: trimmed }, trimmed);
+          if (x.type === "connector") return { ...x, label: trimmed };
+          return x;
+        }),
       );
     },
     [commitElements],
@@ -746,8 +1041,12 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       if (el.type === "text") {
         setSelectedId(null);
         setEditing({ kind: "text", id });
-      } else if (el.type === "rect" || el.type === "ellipse") {
-        setEditing({ kind: "label", id }); // 保持选中，编辑框覆盖在图形中心
+      } else if (
+        el.type === "rect" ||
+        el.type === "ellipse" ||
+        el.type === "connector"
+      ) {
+        setEditing({ kind: "label", id }); // 保持选中，编辑框覆盖在图形中心/连线中点
       }
       return;
     }
@@ -777,7 +1076,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
           break;
         }
         default: {
-          // path/arrow/line：节点原点在 (0,0)，x/y 即位移量，并入 points 后归零
+          // path/connector：节点原点在 (0,0)，x/y 即位移量，并入 points 后归零
           const dx = node.x();
           const dy = node.y();
           next = cur.map((el) => {
@@ -787,7 +1086,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                 ...el,
                 points: el.points.map((v, i) => v + (i % 2 === 0 ? dx : dy)),
               };
-            if (el.type === "arrow" || el.type === "line")
+            if (el.type === "connector")
               return {
                 ...el,
                 points: [
@@ -805,6 +1104,22 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       commitElements(next);
     },
     [commitElements],
+  );
+
+  /** 拖动中：实时更新绑定到该图形的连线（命令式，不走 state） */
+  const onElementDragMove = useCallback(
+    (id: string) => {
+      updateConnectedConnectors(id);
+    },
+    [updateConnectedConnectors],
+  );
+
+  /** 缩放中：同上（Transformer 每帧触发 transform） */
+  const onElementTransform = useCallback(
+    (id: string) => {
+      updateConnectedConnectors(id);
+    },
+    [updateConnectedConnectors],
   );
 
   const onElementTransformEnd = useCallback(
@@ -838,17 +1153,9 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
               ),
             };
           }
-          case "arrow":
-          case "line": {
-            return {
-              ...el,
-              points: [
-                node.x() + el.points[0] * sx,
-                node.y() + el.points[1] * sy,
-                node.x() + el.points[2] * sx,
-                node.y() + el.points[3] * sy,
-              ] as [number, number, number, number],
-            };
+          case "connector": {
+            // 连线不参与 Transformer 缩放（选中连线只有端点手柄），此处不预期触发
+            return el;
           }
           case "text": {
             return {
@@ -861,15 +1168,10 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         }
       });
       node.scale({ x: 1, y: 1 });
-      // path/arrow/line：上面已把变换位移（node.x()/y()）并入 points（绝对坐标），
-      // 必须把节点位移归零——否则重渲染时 points 与残留位移叠加，图形整体偏移（位置漂移）。
+      // path：上面已把变换位移（node.x()/y()）并入 points（绝对坐标），
+      // 必须把节点位移归零——否则重渲染时 points 与残留位移叠加，图形整体偏移。
       // rect/ellipse/text 的 x/y 即元素坐标本身，不能归零。
-      if (
-        target.type === "path" ||
-        target.type === "arrow" ||
-        target.type === "line"
-      )
-        node.position({ x: 0, y: 0 });
+      if (target.type === "path") node.position({ x: 0, y: 0 });
       commitElements(next);
     },
     [commitElements],
@@ -903,8 +1205,21 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         w: Math.abs(x1 - x0),
         h: Math.abs(y1 - y0),
       };
-    return { ...base, type: "arrow", points: [x0, y0, x1, y1] };
-  }, [draft, color, width]);
+    // connector（两点式；起点已绑定图形时吸附到其边缘）
+    let sx = draft.startX;
+    let sy = draft.startY;
+    if (draft.fromId) {
+      const fromEl = byId.get(draft.fromId);
+      if (fromEl)
+        [sx, sy] = bboxBoundaryPoint(getElementBounds(fromEl), x1, y1, 2);
+    }
+    return {
+      ...base,
+      type: "connector",
+      points: [sx, sy, x1, y1],
+      arrowhead,
+    };
+  }, [draft, color, width, arrowhead, byId]);
 
   // 工具 → 快捷键反推表（tooltip 用；绑定可配置，提示随动）
   const toolKeys = useMemo(() => {
@@ -920,12 +1235,46 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   // - 编辑：选择态"点击→边框→再点"进入；绘制态双击进入（§5.2）
   // - Space 平移中一律禁拖/禁选
   const selectable = tool !== "pen" && !panning;
-  const movableOf = (id: string) =>
-    panning || tool === "pen"
-      ? false
-      : tool === "select"
-        ? id === selectedId
-        : true;
+  const movableOf = (id: string) => {
+    // 画笔态不拖；连线态一律不拖（拖拽 = 从图形拉出连线，二者语义冲突）
+    if (panning || tool === "pen" || tool === "connector") return false;
+    const el = byId.get(id);
+    // 绑定端由图形决定位置，连线整体不可拖（自由端用端点手柄调整）
+    if (el?.type === "connector" && (el.connects?.from || el.connects?.to))
+      return false;
+    return tool === "select" ? id === selectedId : true;
+  };
+
+  // 属性条：常驻。选中元素时直接作用于它；未选中时设置"新建默认值"
+  const applyColor = (c: WBColorId) => {
+    setColor(c);
+    if (selectedEl)
+      commitElements(
+        elementsRef.current.map((el) =>
+          el.id === selectedEl.id ? { ...el, color: c } : el,
+        ),
+      );
+  };
+  const applyWidth = (w: WBWidthId) => {
+    setWidth(w);
+    if (selectedEl)
+      commitElements(
+        elementsRef.current.map((el) =>
+          el.id === selectedEl.id ? { ...el, width: w } : el,
+        ),
+      );
+  };
+  const applyArrowhead = (a: WBArrowhead) => {
+    setArrowhead(a);
+    if (selectedEl?.type === "connector")
+      commitElements(
+        elementsRef.current.map((el) =>
+          el.id === selectedEl.id && el.type === "connector"
+            ? { ...el, arrowhead: a }
+            : el,
+        ),
+      );
+  };
 
   // 元素 hover 光标反馈（仅"已选中、可拖动"时显示 move）
   const onHoverCursor = useCallback((cursor: string) => {
@@ -952,19 +1301,19 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
           onClear={() => setConfirmClear(true)}
         />
       </div>
-      {(tool === "pen" ||
-        tool === "rect" ||
-        tool === "ellipse" ||
-        tool === "arrow" ||
-        tool === "text") && (
-        <WhiteboardAttrBar
-          theme={theme}
-          color={color}
-          onColorChange={setColor}
-          width={width}
-          onWidthChange={setWidth}
-        />
-      )}
+      {/* 属性条常驻：选中元素作用于它，未选中设置默认值；连线时显示箭头样式 */}
+      <WhiteboardAttrBar
+        theme={theme}
+        color={selectedEl ? selectedEl.color : color}
+        onColorChange={applyColor}
+        width={selectedEl ? selectedEl.width : width}
+        onWidthChange={applyWidth}
+        showArrowhead={tool === "connector" || selectedEl?.type === "connector"}
+        arrowhead={
+          selectedEl?.type === "connector" ? selectedEl.arrowhead : arrowhead
+        }
+        onArrowheadChange={applyArrowhead}
+      />
       <div className="la-wb-body">
         <div className="la-wb-shapes">常用图形</div>
         <div
@@ -1020,10 +1369,17 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                     movable={movableOf(el.id)}
                     selectable={selectable}
                     hideLabel={!!editing && editing.kind === "label" && editing.id === el.id}
+                    resolved={
+                      el.type === "connector"
+                        ? connectorPoints.get(el.id)
+                        : undefined
+                    }
                     nodeRef={registerNode}
                     onSelect={onSelect}
                     onHoverCursor={onHoverCursor}
                     onDragEnd={onElementDragEnd}
+                    onDragMove={onElementDragMove}
+                    onTransform={onElementTransform}
                     onTransformEnd={onElementTransformEnd}
                   />
                 ))}
@@ -1041,6 +1397,86 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                   onTransformEnd={() => {}}
                 />
               )}
+              {/* 连线吸附高亮 */}
+              {snapTargetId &&
+                (() => {
+                  const el = byId.get(snapTargetId);
+                  if (!el) return null;
+                  const b = getElementBounds(el);
+                  const pad = 4;
+                  return (
+                    <Rect
+                      x={b.x - pad}
+                      y={b.y - pad}
+                      width={b.w + pad * 2}
+                      height={b.h + pad * 2}
+                      stroke={WB_COLORS.blue[theme]}
+                      strokeWidth={1.5 / view.scale}
+                      dash={[6 / view.scale, 4 / view.scale]}
+                      listening={false}
+                    />
+                  );
+                })()}
+              {/* 端点重绑定幽灵线 */}
+              {epDrag &&
+                (() => {
+                  const conn = byId.get(epDrag.connectorId);
+                  if (!conn || conn.type !== "connector") return null;
+                  const pts = connectorPoints.get(conn.id) ?? conn.points;
+                  const fixed: [number, number] =
+                    epDrag.end === "from" ? [pts[2], pts[3]] : [pts[0], pts[1]];
+                  const seg: [number, number, number, number] =
+                    epDrag.end === "from"
+                      ? [epDrag.x, epDrag.y, fixed[0], fixed[1]]
+                      : [fixed[0], fixed[1], epDrag.x, epDrag.y];
+                  return (
+                    <Line
+                      points={seg}
+                      stroke={WB_COLORS[conn.color][theme]}
+                      strokeWidth={WB_WIDTHS[conn.width]}
+                      dash={[6 / view.scale, 4 / view.scale]}
+                      listening={false}
+                    />
+                  );
+                })()}
+              {/* 连线端点手柄（选中连线时） */}
+              {editingConnector &&
+                selectable &&
+                (() => {
+                  const pts =
+                    connectorPoints.get(editingConnector.id) ??
+                    editingConnector.points;
+                  const ends: { end: "from" | "to"; x: number; y: number }[] = [
+                    { end: "from", x: pts[0], y: pts[1] },
+                    { end: "to", x: pts[2], y: pts[3] },
+                  ];
+                  return ends.map((h) => {
+                    const active =
+                      epDrag &&
+                      epDrag.connectorId === editingConnector.id &&
+                      epDrag.end === h.end;
+                    return (
+                      <Circle
+                        key={h.end}
+                        x={active ? epDrag.x : h.x}
+                        y={active ? epDrag.y : h.y}
+                        radius={HANDLE_R / view.scale}
+                        fill={WB_COLORS[editingConnector.color][theme]}
+                        stroke={WB_CANVAS_BG[theme]}
+                        strokeWidth={1.5 / view.scale}
+                        onPointerDown={(e) => {
+                          e.cancelBubble = true;
+                          setEpDrag({
+                            connectorId: editingConnector.id,
+                            end: h.end,
+                            x: h.x,
+                            y: h.y,
+                          });
+                        }}
+                      />
+                    );
+                  });
+                })()}
               <Transformer
                 ref={trRef}
                 rotateEnabled={false}
@@ -1095,6 +1531,29 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                   onCancel={() => finishEdit(editing, "", false)}
                 />
               );
+            // 连线中点 label
+            if (editing.kind === "label" && el.type === "connector") {
+              const pts = connectorPoints.get(el.id) ?? el.points;
+              const size = el.labelSize ?? LABEL_DEFAULT_SIZE;
+              const est = estimateTextSize(el.label ?? "", size);
+              const boxW = Math.max(60, est.w + 16);
+              const boxH = Math.max(24, est.h + 8);
+              return (
+                <TextEditor
+                  key={"cl-" + el.id}
+                  theme={theme}
+                  view={view}
+                  x={(pts[0] + pts[2]) / 2 - boxW / 2}
+                  y={(pts[1] + pts[3]) / 2 - boxH / 2}
+                  box={{ w: boxW, h: boxH }}
+                  fontSize={size}
+                  colorId={el.color}
+                  initial={el.label ?? ""}
+                  onCommit={(text) => finishEdit(editing, text, true)}
+                  onCancel={() => finishEdit(editing, "", false)}
+                />
+              );
+            }
             return null;
           })()}
         {confirmClear && (

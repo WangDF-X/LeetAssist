@@ -109,6 +109,12 @@ export const WB_GRID_COLORS: Record<ResolvedTheme, string> = {
   dark: "#3a3e4a",
 };
 
+/** 画布纸面色（Konva 覆盖物用：手柄描边、标签底等） */
+export const WB_CANVAS_BG: Record<ResolvedTheme, string> = {
+  light: "#ffffff",
+  dark: "#262932",
+};
+
 export const GRID_MODES: readonly GridMode[] = ["dots", "lines", "none"];
 
 export const GRID_MODE_LABEL: Record<GridMode, string> = {

@@ -28,7 +28,7 @@ export interface WBBindings {
 }
 
 export const DEFAULT_BINDINGS: WBBindings = {
-  tools: { v: "select", p: "pen", r: "rect", o: "ellipse", a: "arrow", t: "text" },
+  tools: { v: "select", p: "pen", r: "rect", o: "ellipse", a: "connector", t: "text" },
   undo: { key: "z", ctrl: true },
   redo: { key: "z", ctrl: true, shift: true },
   delete: ["Delete", "Backspace"],

@@ -37,14 +37,24 @@ export interface WBEllipseElement extends WBElementBase {
   label?: string;
   labelSize?: number;
 }
-export interface WBArrowElement extends WBElementBase {
-  type: "arrow";
-  points: [number, number, number, number];
+/** 箭头样式：无 / 反向(起点) / 正向(终点) / 双向 */
+export type WBArrowhead = "none" | "start" | "end" | "both";
+
+/**
+ * 连线（合并原 arrow + line，§4.2）。
+ * - `points` = 自由端字面坐标，永远存储；绑定的端点在渲染时被解析覆盖，兼作"目标被删"时的兜底。
+ * - `connects` 可选且可单边（from/to 各自可选）；绑定端不参与拖动，随目标图形走。
+ */
+export interface WBConnectorElement extends WBElementBase {
+  type: "connector";
+  points: [number, number, number, number]; // [x0,y0,x1,y1]
+  connects?: { from?: string; to?: string };
+  arrowhead: WBArrowhead; // 缺省 "end"
+  label?: string; // 连线中点文字（状态机/流程图分支标注）
+  labelSize?: number;
 }
-export interface WBLineElement extends WBElementBase {
-  type: "line";
-  points: [number, number, number, number];
-}
+
+/** 文本：x,y = 左上角（独立批注；图形内文字用 rect/ellipse 的 label） */
 export interface WBTextElement extends WBElementBase {
   type: "text";
   x: number;
@@ -57,8 +67,7 @@ export type WBElement =
   | WBPathElement
   | WBRectElement
   | WBEllipseElement
-  | WBArrowElement
-  | WBLineElement
+  | WBConnectorElement
   | WBTextElement;
 
 export type WBElementType = WBElement["type"];
@@ -172,6 +181,31 @@ function toBox(raw: Record<string, unknown>) {
 
 const MAX_LABEL_LEN = 200;
 
+const ARROWHEADS: readonly WBArrowhead[] = ["none", "start", "end", "both"];
+
+function toArrowhead(v: unknown): WBArrowhead {
+  return ARROWHEADS.includes(v as WBArrowhead) ? (v as WBArrowhead) : "end";
+}
+
+/** connects 清洗：字段非字符串/超长剥离；from===to（自连）剥离。悬空 id 留到渲染回退。 */
+function toConnects(
+  v: unknown,
+): { connects?: { from?: string; to?: string } } {
+  if (typeof v !== "object" || v === null) return {};
+  const raw = v as Record<string, unknown>;
+  const from =
+    typeof raw.from === "string" && raw.from.length > 0
+      ? raw.from.slice(0, 64)
+      : undefined;
+  const to =
+    typeof raw.to === "string" && raw.to.length > 0
+      ? raw.to.slice(0, 64)
+      : undefined;
+  if (!from && !to) return {};
+  if (from && to && from === to) return {}; // 自连非法 → 剥离（元素保留）
+  return { connects: { ...(from && { from }), ...(to && { to }) } };
+}
+
 /** label 清洗（§4.2 2026-09-22）：非字符串剥离字段不丢元素；空/纯空白视为无 label */
 function toLabelProps(raw: Record<string, unknown>): {
   label?: string;
@@ -234,6 +268,23 @@ export function sanitizeElements(
         out.push({ ...base, type: "ellipse", ...box, ...toLabelProps(raw) });
         break;
       }
+      case "connector": {
+        const points = toPointArray(raw.points, 4);
+        if (!points) {
+          dropped++;
+          continue;
+        }
+        out.push({
+          ...base,
+          type: "connector",
+          points: points as [number, number, number, number],
+          arrowhead: toArrowhead(raw.arrowhead),
+          ...toConnects(raw.connects),
+          ...toLabelProps(raw),
+        });
+        break;
+      }
+      // 兼容旧词汇（V1 无持久化数据，纯防御 + 容忍 LLM 旧写法）
       case "arrow": {
         const points = toPointArray(raw.points, 4);
         if (!points) {
@@ -242,8 +293,10 @@ export function sanitizeElements(
         }
         out.push({
           ...base,
-          type: "arrow",
+          type: "connector",
           points: points as [number, number, number, number],
+          arrowhead: "end",
+          ...toLabelProps(raw),
         });
         break;
       }
@@ -255,8 +308,10 @@ export function sanitizeElements(
         }
         out.push({
           ...base,
-          type: "line",
+          type: "connector",
           points: points as [number, number, number, number],
+          arrowhead: "none",
+          ...toLabelProps(raw),
         });
         break;
       }
@@ -395,16 +450,8 @@ export function getElementBounds(el: WBElement): WBBox {
     }
     case "path":
       return pointsBounds(el.points);
-    case "arrow":
-    case "line": {
-      const [x0, y0, x1, y1] = el.points;
-      return {
-        x: Math.min(x0, x1),
-        y: Math.min(y0, y1),
-        w: Math.abs(x1 - x0),
-        h: Math.abs(y1 - y0),
-      };
-    }
+    case "connector":
+      return pointsBounds(el.points);
   }
 }
 
@@ -427,4 +474,82 @@ export function growShapeForLabel<T extends WBRectElement | WBEllipseElement>(
   const w = Math.max(el.w, minW);
   const h = Math.max(el.h, minH);
   return { ...el, x: cx - w / 2, y: cy - h / 2, w, h };
+}
+
+// ---------- 连线几何（§4.2） ----------
+
+/** 可被连线绑定的元素类型（矩形/椭圆/文本；不含 path 与 connector——防循环依赖） */
+export function isBindable(el: WBElement): boolean {
+  return el.type === "rect" || el.type === "ellipse" || el.type === "text";
+}
+
+/**
+ * 从 box 中心朝目标 (tx,ty) 作射线，求与 box 边界的交点（pad = 额外外扩，给线宽留缝）。
+ * 目标与中心重合时退化为中心点。
+ */
+export function bboxBoundaryPoint(
+  box: WBBox,
+  tx: number,
+  ty: number,
+  pad = 0,
+): [number, number] {
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  const dx = tx - cx;
+  const dy = ty - cy;
+  if (dx === 0 && dy === 0) return [cx, cy];
+  const hw = box.w / 2 + pad;
+  const hh = box.h / 2 + pad;
+  const sx = dx !== 0 ? hw / Math.abs(dx) : Infinity;
+  const sy = dy !== 0 ? hh / Math.abs(dy) : Infinity;
+  const s = Math.min(sx, sy);
+  return [cx + dx * s, cy + dy * s];
+}
+
+/**
+ * 解析连线端点（§4.2）：
+ * - 绑定端 = 两中心连线与对方包围盒边界的交点（锚点自动朝向对方）；
+ * - 自由端 = points 字面值；
+ * - 目标缺失（已删）→ 该端回退字面值（冻结原地，不崩溃）。
+ * @param boundsOf 包围盒提供者：默认数据包围盒；拖动中可注入实时几何实现"跟随"。
+ */
+export function resolveConnectorPoints(
+  conn: WBConnectorElement,
+  byId: Map<string, WBElement>,
+  boundsOf: (el: WBElement) => WBBox = getElementBounds,
+): [number, number, number, number] {
+  const [x0, y0, x1, y1] = conn.points;
+  const fromEl = conn.connects?.from ? byId.get(conn.connects.from) : undefined;
+  const toEl = conn.connects?.to ? byId.get(conn.connects.to) : undefined;
+  const PAD = 2;
+
+  let fromCenter: [number, number] = [x0, y0];
+  if (fromEl) {
+    const b = boundsOf(fromEl);
+    fromCenter = [b.x + b.w / 2, b.y + b.h / 2];
+  }
+  let toCenter: [number, number] = [x1, y1];
+  if (toEl) {
+    const b = boundsOf(toEl);
+    toCenter = [b.x + b.w / 2, b.y + b.h / 2];
+  }
+
+  const start: [number, number] = fromEl
+    ? bboxBoundaryPoint(
+        boundsOf(fromEl),
+        toEl ? toCenter[0] : x1,
+        toEl ? toCenter[1] : y1,
+        PAD,
+      )
+    : [x0, y0];
+  const end: [number, number] = toEl
+    ? bboxBoundaryPoint(
+        boundsOf(toEl),
+        fromEl ? fromCenter[0] : x0,
+        fromEl ? fromCenter[1] : y0,
+        PAD,
+      )
+    : [x1, y1];
+
+  return [start[0], start[1], end[0], end[1]];
 }
