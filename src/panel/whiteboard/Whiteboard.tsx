@@ -293,10 +293,26 @@ function ElementNode({
       const m = label ? estimateTextSize(label, size) : null;
       const midX = (pts[0] + pts[2]) / 2;
       const midY = (pts[1] + pts[3]) / 2;
+      // 线 + 标签底 + 标签文字包进一个可拖 Group：拖动时三者一起走
+      // （ref 挂在内层 Arrow 上，供 updateConnectedConnectors 命令式改 points）
       return (
-        <>
+        <Group
+          id={el.id}
+          draggable={movable}
+          dragDistance={DRAG_DISTANCE}
+          onClick={() => selectable && onSelect(el.id)}
+          onTap={() => selectable && onSelect(el.id)}
+          onMouseEnter={movable ? () => onHoverCursor("move") : undefined}
+          onMouseLeave={movable ? () => onHoverCursor("") : undefined}
+          onDragMove={(e: Konva.KonvaEventObject<DragEvent>) =>
+            movable && onDragMove?.(el.id, e)
+          }
+          onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) =>
+            movable && onDragEnd(el.id, e)
+          }
+        >
           <Arrow
-            {...common}
+            ref={(n: Konva.Node | null) => nodeRef(el.id, n)}
             points={pts}
             stroke={stroke}
             strokeWidth={strokeWidth}
@@ -313,6 +329,7 @@ function ElementNode({
             <>
               {/* 标签底：用纸面色盖住穿过文字的连线，等价于"文字处断开连线"，保证可读 */}
               <Rect
+                name="wb-conn-mask"
                 x={midX - m.w / 2 - 3}
                 y={midY - m.h / 2 - 1}
                 width={m.w + 6}
@@ -322,6 +339,7 @@ function ElementNode({
                 listening={false}
               />
               <Text
+                name="wb-conn-label"
                 x={midX - m.w / 2}
                 y={midY - m.h / 2}
                 width={m.w}
@@ -335,7 +353,7 @@ function ElementNode({
               />
             </>
           )}
-        </>
+        </Group>
       );
     }
     case "text":
@@ -357,6 +375,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const trRef = useRef<Konva.Transformer>(null);
   const nodesRef = useRef(new Map<string, Konva.Node>());
+  const epNodesRef = useRef<{ from?: Konva.Circle; to?: Konva.Circle }>({}); // 选中连线的端点手柄节点
 
   const [size, setSize] = useState<Size>({ w: 0, h: 0 });
   const [elements, setElements] = useState<WBElement[]>([]);
@@ -374,6 +393,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [snapTargetId, setSnapTargetId] = useState<string | null>(null); // 连线吸附高亮
   const [epDrag, setEpDrag] = useState<EndpointDrag | null>(null); // 端点重绑定拖动
+  const [draggingId, setDraggingId] = useState<string | null>(null); // 正在被拖动的元素（拖动中隐藏端点手柄）
   const [panning, setPanning] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [historyTick, setHistoryTick] = useState(0); // 驱动撤销/重做按钮可用态
@@ -467,6 +487,30 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       const pts = resolveConnectorPoints(el, map, boundsOf);
       const node = nodesRef.current.get(el.id) as Konva.Arrow | undefined;
       node?.points(pts);
+      // 同步标签底/文字到新中点（与渲染同一算法，保证拖动中文字也跟随连线）
+      const group = node?.getParent();
+      const labelNode = group?.findOne(".wb-conn-label") as
+        | Konva.Text
+        | undefined;
+      if (labelNode) {
+        const w = labelNode.width();
+        const h = labelNode.height();
+        const midX = (pts[0] + pts[2]) / 2;
+        const midY = (pts[1] + pts[3]) / 2;
+        labelNode.x(midX - w / 2);
+        labelNode.y(midY - h / 2);
+        const maskNode = group?.findOne(".wb-conn-mask") as
+          | Konva.Rect
+          | undefined;
+        if (maskNode) {
+          maskNode.x(midX - w / 2 - 3);
+          maskNode.y(midY - h / 2 - 1);
+        }
+      }
+      // 若这条连线显示了端点手柄（存在手柄节点），手柄也要跟随
+      // （用"节点是否存在"判断，不依赖选中态：重绑后连线保持选中，手柄必须同步）
+      epNodesRef.current.from?.position({ x: pts[0], y: pts[1] });
+      epNodesRef.current.to?.position({ x: pts[2], y: pts[3] });
     }
   }, []);
 
@@ -757,6 +801,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       const d = epDrag;
       setEpDrag(null);
       setSnapTargetId(null);
+      justDraggedRef.current = true; // 忽略紧随的 click：保持连线选中，避免误选到目标图形
       const cur = elementsRef.current;
       const conn = cur.find((x) => x.id === d.connectorId);
       if (!conn || conn.type !== "connector") return;
@@ -1056,6 +1101,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const onElementDragEnd = useCallback(
     (id: string, e: Konva.KonvaEventObject<DragEvent>) => {
       justDraggedRef.current = true; // 忽略拖动结束后可能触发的 click
+      setDraggingId(null); // 拖动结束：恢复端点手柄
       const node = e.target;
       const cur = elementsRef.current;
       const target = cur.find((el) => el.id === id);
@@ -1109,6 +1155,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   /** 拖动中：实时更新绑定到该图形的连线（命令式，不走 state） */
   const onElementDragMove = useCallback(
     (id: string) => {
+      setDraggingId(id); // 拖动中隐藏该元素的端点手柄（避免手柄留在原地）
       updateConnectedConnectors(id);
     },
     [updateConnectedConnectors],
@@ -1439,9 +1486,10 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                     />
                   );
                 })()}
-              {/* 连线端点手柄（选中连线时） */}
+              {/* 连线端点手柄（选中连线时；拖动该连线期间隐藏，避免留在原地） */}
               {editingConnector &&
                 selectable &&
+                draggingId !== editingConnector.id &&
                 (() => {
                   const pts =
                     connectorPoints.get(editingConnector.id) ??
@@ -1458,6 +1506,10 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
                     return (
                       <Circle
                         key={h.end}
+                        ref={(n: Konva.Circle | null) => {
+                          if (n) epNodesRef.current[h.end] = n;
+                          else delete epNodesRef.current[h.end];
+                        }}
                         x={active ? epDrag.x : h.x}
                         y={active ? epDrag.y : h.y}
                         radius={HANDLE_R / view.scale}
