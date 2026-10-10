@@ -22,6 +22,10 @@ export interface WBBindings {
   redo: KeyBinding;
   /** 删除选中元素的键（多个） */
   delete: string[];
+  /** 复制 / 粘贴 / 克隆（Office 风格，2026-09-22） */
+  copy: KeyBinding;
+  paste: KeyBinding;
+  duplicate: KeyBinding;
   /** 平移修饰键（按住 + 拖动），按 e.code 匹配 */
   pan: string;
   contextMenu: ContextMenuAction;
@@ -32,6 +36,9 @@ export const DEFAULT_BINDINGS: WBBindings = {
   undo: { key: "z", ctrl: true },
   redo: { key: "z", ctrl: true, shift: true },
   delete: ["Delete", "Backspace"],
+  copy: { key: "c", ctrl: true },
+  paste: { key: "v", ctrl: true },
+  duplicate: { key: "d", ctrl: true },
   pan: "Space",
   contextMenu: "quickText",
 };
