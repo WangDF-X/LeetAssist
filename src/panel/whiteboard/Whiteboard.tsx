@@ -64,6 +64,9 @@ import {
   type WBTool,
 } from "./Toolbar";
 import { TextEditor } from "./TextEditor";
+import { ShapeRail } from "./ShapeRail";
+import { ParamDialog } from "./ParamDialog";
+import type { WBPreset } from "./presets";
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 4;
@@ -444,6 +447,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null); // 正在被拖动的元素（拖动中隐藏端点手柄）
   const [panning, setPanning] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [presetDialog, setPresetDialog] = useState<WBPreset | null>(null); // 图元库参数窗（§5.1）
   const [historyTick, setHistoryTick] = useState(0); // 驱动撤销/重做按钮可用态
 
   const historyRef = useRef(new HistoryStack());
@@ -474,6 +478,8 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   toolRef.current = tool;
   const selectedRef = useRef(selectedIds);
   selectedRef.current = selectedIds;
+  const presetDialogRef = useRef<WBPreset | null>(presetDialog);
+  presetDialogRef.current = presetDialog;
 
   // ---------- 基础设施 ----------
 
@@ -738,11 +744,50 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     setSelectedIds(clones.map((c) => c.id));
   }, [cloneElements, commitElements]);
 
+  // ---------- 图元库插入（§5.1）----------
+
+  /** 生成预设元素 → 平移到视口中心 → 追加 → 自动全选 → 切选择态（一步撤销） */
+  const insertPreset = useCallback(
+    (preset: WBPreset, params: Record<string, number | boolean>) => {
+      const built = preset.build({ x: 0, y: 0, params, color, width, genId });
+      if (!built.length) return;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const el of built) {
+        const b = getElementBounds(el);
+        minX = Math.min(minX, b.x);
+        minY = Math.min(minY, b.y);
+        maxX = Math.max(maxX, b.x + b.w);
+        maxY = Math.max(maxY, b.y + b.h);
+      }
+      const centerX = (size.w / 2 - view.offsetX) / view.scale;
+      const centerY = (size.h / 2 - view.offsetY) / view.scale;
+      const dx = centerX - (minX + maxX) / 2;
+      const dy = centerY - (minY + maxY) / 2;
+      const placed = built.map((el) => translateElement(el, dx, dy));
+      commitElements([...elementsRef.current, ...placed]);
+      setSelectedIds(placed.map((el) => el.id));
+      setTool("select");
+    },
+    [color, width, size.w, size.h, view, commitElements],
+  );
+
+  const handlePickPreset = useCallback(
+    (preset: WBPreset) => {
+      if (preset.params.length === 0) insertPreset(preset, {});
+      else setPresetDialog(preset);
+    },
+    [insertPreset],
+  );
+
   // ---------- 快捷键（§5.2 hover 门控；绑定来自 bindings.ts 配置，不写死） ----------
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!hoverRef.current) return; // 门控：不在画板区域不响应
+      if (presetDialogRef.current) return; // 参数窗打开时不响应画板快捷键
       const target = e.target as HTMLElement;
       if (target.closest("textarea, input, [contenteditable]")) return; // 文本编辑中让行
       const b = bindingsRef.current;
@@ -1583,7 +1628,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         onArrowheadChange={applyArrowhead}
       />
       <div className="la-wb-body">
-        <div className="la-wb-shapes">常用图形</div>
+        <ShapeRail onPick={handlePickPreset} />
         <div
           ref={containerRef}
           className="la-wb-stage"
@@ -1869,6 +1914,16 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
               取消
             </button>
           </div>
+        )}
+        {presetDialog && (
+          <ParamDialog
+            preset={presetDialog}
+            onConfirm={(params) => {
+              insertPreset(presetDialog, params);
+              setPresetDialog(null);
+            }}
+            onCancel={() => setPresetDialog(null)}
+          />
         )}
         </div>
       </div>
