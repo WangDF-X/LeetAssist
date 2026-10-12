@@ -1,6 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { PanelApp } from "../panel/PanelApp";
 import { PANEL_CSS } from "../panel/styles";
+import { PROBLEM_CHANGED_EVENT } from "../panel/problemMeta";
+import { startRouteWatch } from "./routeWatch";
 
 const HOST_ID = "leetassist-host";
 
@@ -19,3 +21,4 @@ function mount() {
 }
 
 mount();
+startRouteWatch(PROBLEM_CHANGED_EVENT);

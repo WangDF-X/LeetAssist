@@ -1,6 +1,6 @@
 # 02. Storage（本地存储与导入导出）Spec
 
-- 状态：Confirmed
+- 状态：In Progress（2026-09-21 起，随 `feature/whiteboard-konva` 落地最小骨架：Dexie + sessions 表；导入导出/用量展示后续单独分支）
 - 关联阶段：Phase 2 起（画板需要落地存储），贯穿全项目
 - 最后更新：2026-09-15
 - 涉及代码目录：`src/storage/settings.ts`, `src/storage/database.ts`, `src/storage/backup.ts`
@@ -84,7 +84,7 @@ interface ProblemSession {
     elapsed: number;      // 秒
   };
 
-  whiteboard: unknown; // Konva 场景序列化快照（WhiteboardSnapshot），具体结构见 03-whiteboard spec
+  whiteboard: unknown; // 画板场景（WhiteboardScene，自定义元素模型），具体结构见 03-whiteboard spec §4
 
   aiMessages: AiMessage[]; // 结构见 04-ai-assistant spec
 
@@ -197,3 +197,4 @@ API Key:  [***************]
 | 2026-09-15 | 确认 API Key 采用方案 C（不加密）+ 常驻提醒设计；所有待确认问题清空，状态由 Draft 改为 **Confirmed** |
 | 2026-09-15 | 修正 Import 冲突交互设计：恢复"全部覆盖/全部跳过/逐条选择"三个选项并存（之前误删了批量选项，仅保留了逐条选择） |
 | 2026-09-15 | 新增 AI 对话持久化：conversations / codeSnapshots 表，一题多对话、完整保留记录、上下文快照去重（配合 04 的新 UI 设计） |
+| 2026-09-21 | 随画板分支落地最小骨架（Dexie + sessions 表 + ProblemSession，仅服务画板持久化）；whiteboard 字段注释更新为 03 的新自定义元素模型（WhiteboardScene）；导入导出/存储用量展示后续单独分支；状态 → In Progress |
