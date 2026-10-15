@@ -13,6 +13,7 @@
 | `04-ai-assistant/` | BYOK AI 助手 |
 | `05-timer/` | AI 智能计时 |
 | `06-trace/` | 代码执行 Trace（Python / AI Simulation / 未来 Go） |
+| `07-ai-band/` | AI 与功能模块的耦合层：AI 结构化输出（DSL）→ 白板编译器；可复用于后续 AI 相关跨模块功能 |
 
 每个模块目录下有一个 `spec.md`，模板见 `_template.md`。
 

@@ -67,6 +67,7 @@ import { TextEditor } from "./TextEditor";
 import { ShapeRail } from "./ShapeRail";
 import { ParamDialog } from "./ParamDialog";
 import type { WBPreset } from "./presets";
+import { compileDiagram } from "./dsl";
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 4;
@@ -414,6 +415,35 @@ function ElementNode({
   }
 }
 
+/** [DEV-only] 带标注的示例 DSL，用于可视化预览标注效果（正式版删除） */
+const DEV_DEMO_DSL = {
+  dslVersion: 1,
+  caption: "示例：数组双指针 + 树结点高亮",
+  structures: [
+    { id: "A", kind: "array", items: [1, 3, 5, 7], indexed: true },
+    {
+      id: "T",
+      kind: "tree",
+      root: {
+        id: "r",
+        value: 1,
+        children: [
+          { id: "l", value: 2, children: [] },
+          { id: "rr", value: 3, children: [] },
+        ],
+      },
+    },
+  ],
+  annotations: [
+    { kind: "window", from: { struct: "A", at: "cell", index: 0 }, to: { struct: "A", at: "cell", index: 3 }, color: "blue", label: "窗口" },
+    { kind: "pointer", anchor: { struct: "A", at: "cell", index: 0 }, label: "lo", color: "blue" },
+    { kind: "pointer", anchor: { struct: "A", at: "cell", index: 3 }, label: "hi", color: "red" },
+    { kind: "highlight", anchor: { struct: "A", at: "cell", index: 2 }, color: "orange" },
+    { kind: "note", anchor: { struct: "A", at: "cell", index: 2 }, text: "当前考察", color: "green" },
+    { kind: "highlight", anchor: { struct: "T", at: "node", id: "l" }, color: "green" },
+  ],
+};
+
 export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
@@ -746,10 +776,9 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
 
   // ---------- 图元库插入（§5.1）----------
 
-  /** 生成预设元素 → 平移到视口中心 → 追加 → 自动全选 → 切选择态（一步撤销） */
-  const insertPreset = useCallback(
-    (preset: WBPreset, params: Record<string, number | boolean>) => {
-      const built = preset.build({ x: 0, y: 0, params, color, width, genId });
+  /** 把一组已编译元素平移到视口中心 → 追加 → 自动全选 → 切选择态（一步撤销） */
+  const placeElements = useCallback(
+    (built: WBElement[]) => {
       if (!built.length) return;
       let minX = Infinity;
       let minY = Infinity;
@@ -771,8 +800,31 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       setSelectedIds(placed.map((el) => el.id));
       setTool("select");
     },
-    [color, width, size.w, size.h, view, commitElements],
+    [size.w, size.h, view, commitElements],
   );
+
+  /** 图元库插入：构造空值 DSL 结构 → 编译器展开（§4.6，与 AI 同一路径） */
+  const insertPreset = useCallback(
+    (preset: WBPreset, params: Record<string, number | boolean>) => {
+      const { elements: built } = compileDiagram(
+        { dslVersion: 1, structures: [preset.toStructure(params)] },
+        { color, width, genId },
+      );
+      placeElements(built);
+    },
+    [color, width, placeElements],
+  );
+
+  /** [DEV-only] 插入一段带标注的示例 DSL，用于可视化预览（正式版删除） */
+  const insertDemoDiagram = useCallback(() => {
+    const { elements: built, warnings } = compileDiagram(DEV_DEMO_DSL, {
+      color,
+      width,
+      genId,
+    });
+    if (warnings.length) console.warn("[DEV demo] warnings:", warnings);
+    placeElements(built);
+  }, [color, width, placeElements]);
 
   const handlePickPreset = useCallback(
     (preset: WBPreset) => {
@@ -1835,6 +1887,15 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
           onClick={resetView}
         >
           {Math.round(view.scale * 100)}%
+        </button>
+        {/* [临时] 标注预览按钮（浮动，避免被工具栏裁掉）；P3 接上 AI 路径后删除 */}
+        <button
+          className="la-dev-demo"
+          title="插入带标注的示例 DSL（临时预览）"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={insertDemoDiagram}
+        >
+          [DEV] 示例标注
         </button>
         {editing &&
           (() => {

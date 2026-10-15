@@ -213,6 +213,21 @@ ${THEME_VARS_CSS}
   z-index: 2;
 }
 .la-wb-zoomreset:hover { background: var(--la-hover); }
+/* [临时] 画布内的标注预览按钮（浮动在左下角，避免被工具栏裁掉） */
+.la-dev-demo {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 8px;
+  border: 1px dashed var(--la-danger);
+  border-radius: 6px;
+  background: var(--la-surface);
+  color: var(--la-danger);
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 2;
+}
+.la-dev-demo:hover { background: var(--la-hover); }
 
 /* 画板工具行按钮 */
 .la-wb-tool {

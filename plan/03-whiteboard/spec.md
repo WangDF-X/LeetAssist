@@ -18,11 +18,12 @@
   - 后续可慢慢追加更多自定义交互，第一版只做以上这些。
 - 工具栏完全自建（裸画布库），具体设计见第 5 节（Agent 初版稿）。
 - 左侧图标条提供**数据结构图元库**：12 个正交模板（序列/柱状图/链表/栈/队列/表格/键值表/桶/树/堆/图/状态机），参数化宏展开为现有元素，整体操作靠通用多选（见 §4.4、§5.1）。
-- 架构上为程序化作图留门：场景组织支持"从结构化 JSON 批量生成图形元素"（覆盖层设计），供未来 AI 作图 / trace 渲染复用。
+- **提供"语义 DSL + 编译器"作为程序化作图的唯一入口**（§4.6）：图元库与 AI 作图都产出语义 DSL、编译为 `WBElement[]`；几何/样式全在编译器内，与 DSL 解耦。
+- 覆盖层（`scene.overlay`）：编译器产物写入此处，与手绘分离、可整体清空/重绘；渲染在独立 Layer。
 
 ## 2. 明确不做
 
-- **AI 根据题目/代码作图功能不做进第一版**（用户 2026-09-15 确认：功能一个个来做，该功能等用户明确说做时再立项补 spec）；本 spec 只保留架构留门（覆盖层 + 场景图 + JSON 双向序列化）。
+- **AI 作图功能本身不在本模块范围**（是否需要、何时做由 04 / 07 决定）：本模块只提供"语义 DSL + 编译器"这一**确定性作图入口**（§4.6）与覆盖层；AI 侧的产出与耦合见 04 / 07。
 - 不做多人协作、云端同步。
 - 不做画板分享链接、导出图片（除非用户后续明确要求）。
 - 不引入完整白板套件（tldraw / Excalidraw 等），理由见第 3 节选型记录。
@@ -132,16 +133,18 @@ interface WhiteboardScene {
 - 持久化：`JSON.stringify(scene)` → `lz-string` 压缩 → `ProblemSession.whiteboard`（02 spec）；背景层（网格）是纯渲染、不入库。
 - **覆盖层与绘制层同构**（同一 `WBElement` 模型），程序化管线与用户渲染管线完全复用；覆盖层支持整体清空 + 批量重绘（`setOverlay(elements)`），不污染手绘内容。
 
-### 4.4 LLM 程序化生成契约（架构留门的核心）
+### 4.4 程序化生成 IR 契约（`WBElement[]`，编译器内部）
 
-未来 AI 作图 / trace 渲染向覆盖层写入时，输入 = 4.2 的 `WBElement[]` JSON。加载管线统一做防御性校验：
+> 2026-10-12 定位调整：**AI / 图元库不再直接产出 `WBElement[]`**——它们产出**语义 DSL**（§4.6），由**编译器**翻译为本节的 `WBElement[]`（IR）。本节规定 IR 的形态、防御性校验与几何 seam；§4.6 规定 DSL 与编译器。
+
+任何写入绘制层/覆盖层的 `WBElement[]`（无论来自编译器、手绘、还是未来扩展）统一过校验管线：
 
 1. 逐元素校验 `type` 合法、必填字段存在且为有限数值、字符串字段确为字符串；
 2. 数值 clamp 到合理范围（坐标 ±100000、尺寸 ≤ 100000、字号 8–72）；
 3. 未知字段剥离、非法元素丢弃并计数，UI 一次性提示"N 个元素无法识别已跳过"；
-4. `id` 缺失时自动生成 `ov-` 前缀 id。
+4. `id` 缺失时自动生成 `ov-` 前缀 id（覆盖层）。
 
-效果：LLM 的 prompt 只需描述 4.2 的类型表，无需了解 Konva / 存储 / 压缩的任何细节；校验层保证垃圾输入不污染画板。
+效果：DSL / 编译器的 prompt 与实现都不需要了解 Konva / 存储 / 压缩；校验层保证垃圾输入不污染画板。
 
 **节点类图形的生成形态**（2026-09-22 补）：链表节点/流程图框等"框+文字"= **单个 rect/ellipse 元素带 label**（如 `{type:"rect", x, y, w, h, label:"1→"}`），不拆成 rect+text 两个元素——避免程序化生成产生松散组合、后续连线/图元库引用困难。**连线**同理：`{type:"connector", connects:{from:"<节点id>", to:"<节点id>"}, arrowhead:"end", label:"是"}`，坐标由渲染层解析，AI 不必算几何。
 
@@ -189,9 +192,9 @@ const WB_PRESET_GROUPS = {
 - **模板清单（12 个 × 4 组）**：线性（序列、柱状图、链表、栈、队列）/ 二维（表格·网格、键值表·哈希、桶）/ 层级（树、堆）/ 关系（图、状态机）。参数、默认值、尺寸见 §5.1。
 - **明确不做**：坐标轴 / 数轴 / 坐标系（几何、区间类手绘）；标记类（指针/高亮/下标行）后置；"插入后改参数重建"不做（无持久结构身份，`groupId` 不引入）。
 
-**LLM 程序化输出契约（细则，2026-10-12）**
+**IR 输出契约细则（2026-10-12）**
 
-> 面向 "AI 作图 / trace 渲染 / 题解过程"：模型只需产出标准 `WBElement[]`，即可画出手插图元库**同等风格**的结构草图与过程标注。本节与 §5.1 图元库、§4.2 元素模型**同源**，须同步维护（见 G）。
+> 编译器的产物（IR）须满足以下规则；图元库与 AI（经 DSL §4.6）最终都编译到这一格式。本节与 §4.6、§5.1 图元库**同源**，须同步维护（见 G）。
 
 **A. 硬性规则（违反会被 `sanitizeElements` 丢弃或降级）**
 
@@ -273,6 +276,118 @@ const WB_PRESET_GROUPS = {
 
 坐标取整（保留 1 位小数）、path 抽稀（simplify-js，tolerance ≈ 1.0）、语义 id 短字符串。保存时估算压缩后大小，超过 100KB 弹一次轻量提示（toast）告知"本题画板数据偏大，建议清理无用笔迹"，不阻断保存、不自动删用户数据。
 
+### 4.6 语义 DSL 与编译器（作图的唯一入口，2026-10-12 定稿）
+
+**目标与解耦承诺**：白板的"程序化作图"能力收口为一条路径——**语义 DSL（画什么）→ 编译器（怎么画）→ `WBElement[]`（IR §4.4）→ 渲染**。**图元库（§5.1）与 AI 作图（04 / 07）都走这条路径**，二者对同一结构生成像素级一致的结果。以后**优化图形只改编译器**，DSL 与 LLM 输出不变（只有引入全新语义概念才动 DSL）。
+
+```
+[图元库参数] ┐
+             ├─▶ DSL（语义层，稳定、版本化，dslVersion=1）
+[AI 输出]    ┘        │
+                      ▼  编译器（我们自己的，随便改）
+             validate → layout+anchors → build(元素+锚点) → annotations → assemble
+                      │
+                      ▼
+                WBElement[]（IR §4.4） ──▶ 渲染器
+```
+
+**DSL v1（语义，不含任何坐标/尺寸/颜色字面量）**：
+
+```ts
+interface LlmDiagram {
+  dslVersion: 1;
+  caption?: string;
+  structures: DslStructure[];      // 可多个，编译器自动排布（默认纵向堆叠、居中）
+  annotations?: DslAnnotation[];
+}
+type DslValue = string | number | null;
+type ColorName = "default" | "red" | "blue" | "green" | "orange"; // 语义色
+interface DslBase { id?: string; name?: string } // id 供标注引用（缺省由编译器分配 s0/s1…）；name 图上显示的结构名
+
+type DslStructure =
+  | DslBase & { kind: "array";    items: DslValue[]; indexed?: boolean }
+  | DslBase & { kind: "matrix";   rows: DslValue[][]; rowHeaders?: DslValue[]; colHeaders?: DslValue[] }
+  | DslBase & { kind: "map";      entries: { key: DslValue; value: DslValue }[]; header?: boolean } // 键值表/哈希
+  | DslBase & { kind: "linkedList"; nodes: { id?: string; values: DslValue[] }[];          // 每结点可多值
+               doubly?: boolean; circular?: boolean }
+  | DslBase & { kind: "stack";    items: DslValue[] }
+  | DslBase & { kind: "queue";    items: DslValue[]; deque?: boolean }
+  | DslBase & { kind: "bucket";   buckets: DslValue[][] }
+  | DslBase & { kind: "barChart"; values: number[]; labels?: DslValue[] }
+  | DslBase & { kind: "tree";     variant?: "binary" | "nary"; root: DslTreeNode }
+  | DslBase & { kind: "heap";     values: DslValue[]; showArray?: boolean }                 // 数组表示 → 完全二叉树
+  | DslBase & { kind: "graph";    nodes: { id: string; label?: DslValue }[];
+               edges: { from: string; to: string; label?: DslValue; weight?: number }[];
+               directed?: boolean }
+  | DslBase & { kind: "stateMachine"; states: { id: string; label?: DslValue }[];
+               transitions: { from: string; to: string; label?: string }[];
+               initial?: string; accepting?: string[] };
+
+interface DslTreeNode { id?: string; value?: DslValue; children?: DslTreeNode[] }
+```
+
+**标注（过程态）——锚到语义位置，不锚坐标**（解耦命门）：
+
+```ts
+type DslAnchor =
+  | { struct: string; at: "cell";  index: number }          // 一维第 index 格
+  | { struct: string; at: "cell2"; row: number; col: number } // 二维格
+  | { struct: string; at: "node";  id: string }             // 链表/树/图/状态机结点
+  | { struct: string; at: "gap";   index: number };         // 元素之间（窗口边界）
+
+type DslAnnotation =
+  | { kind: "pointer";   anchor: DslAnchor; label: string; color?: ColorName }
+  | { kind: "highlight"; anchor: DslAnchor; color?: ColorName }
+  | { kind: "window";    from: DslAnchor; to: DslAnchor; label?: string; color?: ColorName }
+  | { kind: "note";      anchor?: DslAnchor; text: string; color?: ColorName };
+```
+
+**标注解析的默认策略**（DSL 只给语义位置，摆放由编译器决定；2026-10-12 P2 定稿）：
+
+- `pointer`：在锚点 box **正下方居中**（间距 `POINTER_GAP=34`，留出数组下标行等）放 `text`，并生成一条**自由端点 `connector`**（`arrowhead:"end"`）从文字指向锚点底边；
+- `highlight`：在锚点 box 上**覆盖一个同尺寸描边图形**（锚点为椭圆则用 `ellipse`，否则 `rect`）——视觉上"该处变色"，**不修改原元素**、无需元素 id；
+- `window`：`from`/`to` 两锚点 box 的**并集外扩 `PAD=6`** 画描边 `rect`；有 `label` 时置于框上方居中；
+- `note`：有锚点 → 锚点 box **下方第二车道**（指针文字再下 `NOTE_LANE=30`）；无锚点 → 整体包围盒**下方**；
+- `caption`（图级）：**最后渲染**，置于"含标注"的整体包围盒**上方居中**（字号 18）——保证不与窗口标签/批注挤在一处；
+- 摆放策略是**启发式车道**（避让数组下标行、把 pointer/note/caption 分层）；**并不能保证任意复杂组合都不重叠**，后续可加通用避让；
+- 颜色 `color ?? 当前新建默认色`；锚点不存在 → **跳过该标注并记 warning**，不抛错。
+
+**编译器流水线**：
+1. `validate`：结构和字段合法、`id` 唯一、`anchor` 引用存在且在范围内；
+2. `layout + anchors`：每个结构交给对应 builder → 得到 `{ elements, anchors }`；引擎决定多结构整体排布并登记**锚点表** `anchorKey(DslAnchor) → 几何`;
+3. `build`：builder 产出 IR 元素（满足 §4.4）；
+4. `annotations`：读锚点表把标注解析成元素（指针=`text`+自由 `connector`；高亮=覆盖描边图形；窗口=覆盖框；批注=`text`；见上"默认策略"）；
+5. `assemble`：汇总 → 居中到视口中心 → 过校验管线 → 写覆盖层。
+
+**锚点表是布局层与标注层之间的唯一接口**：改 builder 的几何（尺寸/间距/朝向）只改 builder 内坐标，锚点 key 不变 → 所有标注自动落对位置。
+
+**与图元库的统一（方案甲）**：`presets.ts` 的布局**下沉**到 `dsl/builders/`；左栏模板参数只负责"填一个空值 DSL 结构"，插入 = `compileDiagram`。DSL 的 12 个 `kind` 与左栏 12 模板一一对应。`WBPreset` 保留 UI 元数据（id/name/group/params），其 `build` 改为 `toStructure(params) → DslStructure`。
+
+**模块划分**（`src/panel/whiteboard/dsl/`）：
+
+```
+schema.ts       # DSL 类型（冻结契约，含 dslVersion）
+validate.ts     # 结构/引用/范围校验
+anchors.ts      # 锚点类型 + 注册表
+engine.ts       # 排布 + 编译编排
+builders/*.ts   # 12 结构：array/matrix/map/linkedList/tree/heap/graph/stack/queue/bucket/barChart/stateMachine
+annotations.ts  # pointer/highlight/window/note 解析
+index.ts        # compileDiagram(dsl) -> { elements, dropped, warnings }
+```
+
+**覆盖层**：编译器产物统一写 `scene.overlay`（与手绘 `elements` 分离）；渲染在独立 Konva Layer（`listening=false`），共用 `view` 变换。清空/重绘 `setOverlay([])` / 换一批，不污染手绘。
+
+**扩展性（对应"改图不动 LLM"）**：
+
+| 动作 | 改动位置 | 动 DSL/提示词？ |
+|---|---|---|
+| 改结构尺寸/间距/朝向/箭头样式 | `builders/*` 或样式常量 | 否 |
+| 改标注视觉 | `annotations.ts` | 否 |
+| 新增结构 | 加 DSL `kind` + builder + 提示词一句 | 是（罕见） |
+| 新增标注 | 加 `DslAnnotation` + 解析器 + 提示词一句 | 是（罕见） |
+
+**维护约束**：DSL `kind` 集合、`builders/*`、§5.1 模板表三者同源；改动同步（并入 §4.4 G）。
+
 ## 5. UI / 交互（Agent 初版设计稿，待用户看效果后提修改意见）
 
 ### 5.1 工具栏（按用户 mockup：顶部工具行 + 左侧常用图形竖条）
@@ -306,8 +421,8 @@ const WB_PRESET_GROUPS = {
 
   - **生成尺寸/间距**（世界坐标，§4.4 几何 seam）：通用方格 44；链表结点 = 值数×40 宽 × 30 高（每值一格）；树/图结点圆 ⌀44（状态机 ⌀48）；字号 16；树/堆层距 72、同层距 24。
   - **链表细节**：结点可含多个值格（参数"每结点值数"，默认 1）；**连线按"就近格"绑定**——选中心最靠近目标结点的那一格，距离相同时取"环外侧"格（使环形里方向反转的边也朝向对方，箭头不斜穿）；**环形时结点沿矩形绕行排布**（上排 L→R、下排 R→L）；**双链用同一条连线的双向箭头（`arrowhead:"both"`）**，不再另加反向连线。
-  - **插入流程**：点图标 →（有参数）**画板居中参数窗** → 生成一组现有元素 → 定位视口中心 → 自动全选 → 切选择态 → 一步撤销。
-  - 不引入新元素类型（§4.4 契约）；"整体操作"（移动/缩放/删除）由 §5.4 的**通用多选**承担，不引入 `groupId`。
+  - **插入流程**：点图标 →（有参数）**画板居中参数窗** → **构造一个空值 DSL 结构**（§4.6）→ `compileDiagram` → 定位视口中心 → 自动全选 → 切选择态 → 一步撤销。
+  - **实现**：模板参数只用于"填 DSL 结构"（`WBPreset.build` → `toStructure`）；几何尺寸/间距全部由 `dsl/builders/*` 决定（§4.6）。不引入新元素类型（§4.4 IR 契约）；"整体操作"（移动/缩放/删除）由 §5.4 的**通用多选**承担，不引入 `groupId`。
 - 画布右下角：缩放比例显示（如 `100%`）+ 点击复位视图按钮。
 - "清空"需要二次确认弹窗（防误触丢数据）。
 - **背景网格三样式**（2026-09-21 用户确认）：点阵（默认）/ 线格 / 无网格，入口在 01 骨架预留的"白板设置"popover（该 popover 的第一个真实内容）；`gridMode` 为全局设置（不按题），持久化 `chrome.storage.local`；网格颜色随主题。实现顺序上排在核心绘图功能之后。
@@ -388,7 +503,9 @@ const WB_PRESET_GROUPS = {
 - [ ] **绘制态可选中删除**：除画笔外任意工具单击图形即选中（出边框+缩放手柄，与选择态一致），直接 `Delete` 删除；小幅抖动仍算点击（`dragDistance=3`）。
 - [ ] **连线**：从图形拖到图形建立绑定连线；移动/缩放所连图形时连线端点自动跟随；箭头四样式（无/正向/反向/双向）可设；选中连线出两个端点手柄，拖端点可改接到别的图形或脱开为自由端；连线中点可写标签（双击/选择态再点编辑）；删除被连图形后连线冻结在原位不崩溃；半绑定与自由连线可用。
 - [ ] **多选（框选）与整体操作**：选择态空白拖动框选；`Shift`+拖动任意工具态可框选；`Shift`+点击加选/减选；拖动任一选中元素整体平移；缩放手柄整体缩放（一次性提交）；`Delete` 删全部；`Ctrl+C/V/D` 复制/粘贴/克隆（单个与多选通用）；属性条颜色/线宽作用于全部；绘制态不受影响；恰好选中一个时"再点编辑"仍有效。
-- [ ] **数据结构图元库**（12 模板 × 4 组）：左栏窄图标条点模板 → 有参数者弹**画板居中参数窗**（数字步进框 + 开关）→ 生成一组现有元素并**自动全部选中**、**切到选择态**、**定位视口中心**；图（固定 4 圆环）无参数直接插入；可立即拖动整体摆位或再框选/手动增删；一次插入 = 一步撤销；结点文字留空；不引入复合类型/`groupId`；主题/连线跟随一致；左栏分组卡片、可滚动且有滚动提示、图标随主题。
+- [ ] **数据结构图元库**（12 模板 × 4 组）：左栏窄图标条点模板 → 有参数者弹**画板居中参数窗**（数字步进框 + 开关）→ **构造空值 DSL 结构并编译**为元素并**自动全部选中**、**切到选择态**、**定位视口中心**；图（固定 4 圆环）无参数直接插入；可立即拖动整体摆位或再框选/手动增删；一次插入 = 一步撤销；结点文字留空；不引入复合类型/`groupId`；主题/连线跟随一致；左栏分组卡片、可滚动且有滚动提示、图标随主题。
+- [ ] **语义 DSL + 编译器**（§4.6）：`compileDiagram(dsl)` 能把 12 种结构的 DSL 确定性编译为 `WBElement[]`（IR 满足 §4.4）；两种输入（图元库空值结构 / 含值+标注的 DSL）产出一致风格；**标注锚到语义位置**——改变 builder 的尺寸/间距/朝向后，指针/窗口/高亮仍正确落位（无需改 DSL）。
+- [ ] **图元库与 DSL 统一（方案甲）**：左栏插入与 `compileDiagram` 走同一编译器，重构后**视觉与既有实现一致**（无回归）。
 - [ ] 常规绘图交互无明显卡顿（页内悬浮面板场景，定性验收）。
 
 ## 8. 待确认问题
@@ -432,3 +549,6 @@ const WB_PRESET_GROUPS = {
 | 2026-10-12 | **链表图元改进**（§5.1/§4.4 C）：结点尺寸缩小为"每值一格 40×30"（原 96×44）；新增参数**每结点值数**（1–4，默认 1），结点=多个相邻值格；连线绑定"来源结点末格→目标结点首格"使锚点落在整个结点边缘；**环形链表改为沿矩形绕行排布**（上排 L→R、下排 R→L），消除收尾箭头横穿中间的问题 |
 | 2026-10-12 | 链表**双链箭头修正**：去掉"正向箭头 + 反向箭头"两条连线（多值结点时交叉混乱），改为**同一条连线用双向箭头** `arrowhead:"both"`（末格→下一结点首格）；§5.1/§4.4 E 同步 |
 | 2026-10-12 | 链表**连线绑定改"就近格"（方案 A）**：绑定端不再固定首/末格，而取**中心最靠近目标结点**的格子，平局时取"环外侧"格 → 环形里方向反转的边也朝向对方，箭头不再斜穿（§5.1/§4.4 E 同步） |
+| 2026-10-12 | **引入语义 DSL + 编译器（§4.6）**：确立"程序化作图唯一入口 = DSL → 编译器 → `WBElement[]`(IR) → 渲染"；§4.4 由"LLM 输出契约"改为**编译器内部 IR 契约**（AI/图元库不再直接产元素，改产 DSL）；**方案甲**：图元库布局下沉到 `dsl/builders/`，左栏插入 = 构造空值 DSL 结构并编译；新增锚点表（布局层↔标注层唯一接口）与 4 种标注（pointer/highlight/window/note）；§1/§5.1/§7 同步。AI 侧的产出与耦合见 04 / 07 |
+| 2026-10-12 | **P1 落地**（`src/panel/whiteboard/dsl/`）：`schema/anchors/validate/engine/annotations + builders/*`（12 结构）编译管线；`presets.ts` 改为 `toStructure()` 产出空值 DSL，`Whiteboard` 左栏插入改走 `compileDiagram`；与原实现**视觉一致**。schema 补 `id?`、`map.header`、`heap.showArray`；`typecheck`/`build` 通过 |
+| 2026-10-12 | **P2 落地**（`dsl/annotations.ts`）：实现 pointer/highlight/window/note 解析——pointer=文字+自由箭头（锚点下方）、highlight=覆盖描边图形（随锚点形状 rect/ellipse）、window=并集外扩框、note=锚点上方/包围盒左上、caption=包围盒上方；锚点缺失跳过并 warning。`AnchorGeom` 增 `shape`；§4.6 补"标注默认策略"；临时脚本验证通过、`typecheck`/`build` 通过 |
