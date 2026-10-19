@@ -17,6 +17,8 @@
 
 每个模块目录下有一个 `spec.md`，模板见 `_template.md`。
 
+程序化作图专项契约见 [`03-whiteboard/diagram-contract.md`](03-whiteboard/diagram-contract.md)：03 §4.6 的规范性补充，集中定义 DSL v2、Schema/语义校验、标注、诊断、预算和原子提交；2026-10-19 用户接受推荐方案后为 Confirmed，§10 是确认记录。04/07 整体仍按各自 spec 状态推进。
+
 ## Spec 状态机
 
 ```

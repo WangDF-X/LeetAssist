@@ -2,7 +2,7 @@
 
 - 状态：Draft（方向已与用户确认 2026-10-12；落地细节见第 8 节待确认）
 - 关联阶段：Phase 4（在 03 编译器 §4.6 与 04 §3.9 之后）
-- 最后更新：2026-10-12
+- 最后更新：2026-10-19
 - 涉及代码目录：`src/panel/bridge/`（暂定；见 §4）
 
 > 命名说明：本模块是 **04（AI）与 03（白板）之间的"连接带/胶水层"**，负责把 AI 的**结构化输出**安全地送进功能模块并回传状态。**未来其它"AI 相关、跨模块"的功能（如 AI 标注某一步、AI 解释并高亮）也复用本层**，而不是各写各的耦合代码。
@@ -16,7 +16,7 @@
 
 ## 2. 明确不做（Out of Scope）
 
-- 不做 DSL 的解析/校验（那是 03 §4.6 `compileDiagram` 的职责）。
+- 不做 DSL 文本抽取/JSON 解析（04 §3.9），不做 Schema/语义校验（03 §4.6），不复制规则。健壮性契约见 [03 补充规范](../03-whiteboard/diagram-contract.md)。
 - 不做 LLM 调用与提示词（那是 04 §3.9 的职责）。
 - 不做白板渲染与元素模型（03）。
 - 不做"AI 自动作图"（触发始终由用户显式发起）。
@@ -27,13 +27,13 @@
 ### 3.1 分层与依赖方向（解耦核心）
 
 ```
-[04 Agent/LLM] --(LlmDiagram JSON)--> [07 Bridge] --(compileDiagram)--> [03 编译器] --> overlay
+[04 输出适配] --(unknown JSON)--> [07 Bridge] --(语义命令)--> [03 编译器] --> 原子提交 overlay
                                         ^                                         │
-                                        └──────────(状态: ok/dropped/error)──────┘
+                                        └────(状态: ok/partial/error + diagnostics)────┘
 ```
 
-- **04 只产出 DSL 文本**，不认识白板 DOM / Konva / 编译器内部。
-- **03 只暴露一个"命令接口"**（收 DSL 字符串、报告结果），不感知调用方是 AI 还是图元库。
+- **04 输出适配只提取/解析语义 JSON**，以 unknown 交给桥接层，不认识白板 DOM / Konva / 编译器内部。
+- **03 只暴露一个"命令接口"**（收不可信 DSL 对象、编译/提交并报告结果），不感知调用方是 AI 还是图元库。
 - **07 是唯一知道"AI 与白板如何接线"的地方**；换通信方式/换模块，只改 07。
 
 ### 3.2 通信通道
@@ -47,10 +47,13 @@
 
 1. 用户在对话里显式要求作图（或走作图模式）。
 2. 04 组装提示词（附 03 §4.6 的 DSL 契约 + few-shot），流式取回复。
-3. 04 抽取 ```json 代码块 → 得到 DSL 文本（**04 §3.9**）。
-4. 04 调用 `bridge.drawFromAI(dslText, { sourceMessageId })`。
-5. 07：`compileDiagram(dsl)` → `{ elements, dropped, warnings }`；`WhiteboardApi.setOverlay(elements)`；必要时把视图居中到新图。
-6. 07 把结果（成功/跳过 N 个/失败原因）**回传**给 04，在对话气泡上显示状态（如"已绘制到画板 · 清空"）。
+3. 04 等待正常完整回复，提取唯一载荷并标准 JSON 解析为 unknown；失败不调用作图命令（04 §3.9）。
+4. 调用 `bridge.drawFromAI(input, { problemId, requestId, sourceMessageId })`；上下文在请求发起时固定，不能用回复到达时的题目替代。
+5. 07 检查目标和请求有效性，交给白板语义命令；03 在暂存区校验/编译/严格检查 IR，返回 CompileResult。
+6. error 不提交；ok/partial 在提交前再次检查请求生命周期，居中后的批次符合几何边界才一次性替换 overlay。03 纯编译器不写场景，白板命令负责提交；07 不再额外 setOverlay，避免双重写入。
+7. 实际应用后回传 04：成功、N 条标注未绘制、失败或过期未应用；不得根据非空元素/warnings 推断成功。
+
+**原子性**：不先清空旧图。error 不改变旧 overlay、手稿、视口或撤销状态；partial 是完整新主体与有效标注的整批替换，不是部分结构与旧图拼接。
 
 ### 3.4 生命周期与持久化
 
@@ -58,12 +61,15 @@
 - 关闭面板前统一走 01 `persistOnClose` 钩子（不允许绕过）。
 - 清空：对话侧"清空画板叠加"按钮 → `WhiteboardApi.clearOverlays()`；不触碰手绘层。
 - 多题独立：覆盖层与题绑定（随 `problemId` 广播切换）。
+- 请求有效性：同目标新作图请求使旧待提交请求失效；切题、取消、显式清空、卸载使相关待提交请求失效。用 requestId/代次检查，旧结果晚到不得覆盖新图、串题或复活已清空的图。
+- 过期结果明确回传 STALE_REQUEST，不缓存等待切回题目后自动应用，不自动重放。
 
 ### 3.5 错误与降级
 
-- DSL 解析/校验失败：**不渲染**，回传明确原因（"作图输出无法解析"），不静默降级为裸坐标。
-- 部分元素被丢弃：渲染可用部分 + 报告 `dropped` 数。
-- 编译异常：捕获后回传，不崩溃白板。
+- 抽取/解析/主体校验失败：不提交，保留旧图并明确提示，不降级裸坐标。
+- **仅非法标注允许 partial**：主体完整、有效标注完整，按条计数与安全诊断可见；部分结构/IR 不得成功。
+- 主体/有效标注内部编译异常、重复锚点、IR 后置失败：error，暂存产物整批丢弃，异常不传播到 UI。
+- 目标未挂载、请求过期/题目不匹配分别为 TARGET_UNAVAILABLE、STALE_REQUEST，不排队自动重放。桥接错误单列，不另造编译规则。
 
 ### 3.6 面向未来的复用
 
@@ -75,8 +81,8 @@
 ```ts
 /** 白板向 bridge 注册的命令接口（只暴露语义命令） */
 interface WhiteboardApi {
-  /** 用 DSL 文本/对象作图，返回编译结果；实现内部调用 03 的 compileDiagram */
-  insertDiagram(dsl: string | LlmDiagram): DiagramResult;
+  /** 内部调用纯编译器；有效请求的 ok/partial 才原子提交 */
+  insertDiagram(input: unknown, context: DiagramRequestContext): DiagramResult;
   /** 清空覆盖层（不动手绘） */
   clearOverlays(): void;
   /** 订阅覆盖层状态（用于对话侧展示"已绘制/清空"） */
@@ -85,10 +91,18 @@ interface WhiteboardApi {
 
 interface DiagramResult {
   status: "ok" | "partial" | "error";
-  elementCount: number;
-  dropped: number;
-  warnings?: string[];
-  message?: string; // 失败原因（面向用户）
+  applied: boolean; // ok/partial=true；error=false
+  elementCount: number; // 本次实际提交数；error=0，不表示旧图为空
+  droppedAnnotations: number; // 本次提交时未绘制的标注条数；error=0
+  diagnostics: DiagramDiagnostic[]; // 原样继承 03 结构化诊断
+  bridgeError?: "TARGET_UNAVAILABLE" | "STALE_REQUEST";
+  message?: string; // 安全、简明的用户提示
+}
+
+interface DiagramRequestContext {
+  problemId: string;
+  requestId: string; // 发起时登记，用于取消/清空/切题/晚到结果校验
+  sourceMessageId?: string;
 }
 
 interface OverlayState {
@@ -99,19 +113,24 @@ interface OverlayState {
 /** 07 暴露给 04 的门面（04 只依赖这一个） */
 interface AiBridge {
   drawFromAI(
-    dsl: string | LlmDiagram,
-    meta?: { sourceMessageId?: string },
+    input: unknown,
+    context: DiagramRequestContext,
   ): DiagramResult;
   clear(): void;
 }
 ```
 
-- `LlmDiagram` 类型定义在 **03 §4.6**（07 只引用，不重复定义）。
+- `LlmDiagram`、`DiagramDiagnostic` 与编译状态语义定义在 03 §4.6 及补充规范；07 只依赖公开契约，不 import builder 等内部实现。外部参数保留 unknown，03 内部校验后才生成可信类型。
+- 接口示意表达职责；若命令异步则返回 Promise，并在异步完成后再次检查请求再提交。同步/异步均不能放宽原子性。
+- 结果不变量：ok/partial 必须 applied=true 且无 bridgeError；error 必须 applied=false、elementCount=0、droppedAnnotations=0，并含编译 error 诊断或 bridgeError。生产类型应使用判别联合约束这些组合，禁止构造“失败但已应用”的结果。
 - 通道注册/获取：`useWhiteboardApi()` / `WhiteboardApiProvider`（面板级）。
 
 ## 5. UI / 交互
 
 - 对话气泡：作图消息下方显示状态芯片 `[已绘制到画板]`（失败则 `[作图失败：原因]`），旁带 `[清空叠加]`。
+- partial 为 `[主体已绘制 · N 条标注未绘制]`，可查看安全诊断/路径；error 明确失败或未应用，不能因为旧图还在显示成功。
+- **标注反馈**：未绘制诊断按原始 annotationIndex/path 展示，每条只计一次；全部无效时显示“主体已绘制 · 标注均未绘制”。按 03 §4.3 已确认规则启用 ANNOTATION_CONFLICT / LAYOUT_OVERLAP：冲突丢弃按条 partial；布局 warning 单列，不计丢弃数、不改变 ok；无损去重保留来源索引、不计丢弃。
+- Bridge 不改标注颜色/文字/引用、不代替编译器去重，不尝试把失效局部 note 改成图级 note；合法引用缺锚点的内部错误原样回传 error。
 - 白板侧：AI 图与手绘视觉一致（同一编译器）；清空 AI 图不影响手绘图。
 - 触发入口：输入框旁的作图模式/斜杠命令（具体形态与 04 模式清单一起定，见 04 §8）。
 
@@ -125,6 +144,11 @@ interface AiBridge {
 - [ ] AI 产出的 DSL 能经 `bridge` 确定性编译并绘到盖层；同一 DSL 与图元库生成的同结构**视觉一致**。
 - [ ] 04 不 import 03 内部实现；03 不感知 AI；唯一耦合点集中在 07。
 - [ ] 解析/校验失败**不渲染且不降级**，有明确原因回传并在对话中显示。
+- [ ] 原子替换：error 保留旧图/手稿/视口/撤销状态；ok/partial 一次提交；partial 只丢非法标注，内部坏 IR 不能部分成功。
+- [ ] 03 diagnostics 原样回传，按条计数，实际应用后显示状态；目标不可用/过期为未应用。
+- [ ] 请求竞态测试：新请求先完成旧请求后完成、切题再切回、请求期间清空/取消/卸载，不串图、不复活旧图、不自动重放。
+- [ ] 标注反馈按原索引定位、按条计数；全部标注无效提示明确；非丢弃型布局 warning 与 partial 分开，桥接层不擅自改标注。
+- [ ] **Chrome/Edge**：分别验证跨栏命令、原子提交、切题/取消/清空竞态及保存恢复，按 AGENTS.md 记录版本与结果。
 - [ ] 覆盖层随题保存/恢复；关闭面板走 `persistOnClose`；切题不串图。
 - [ ] 清空叠加不触碰手绘层。
 - [ ] 通信通道可被后续 AI 相关跨模块功能复用（新增功能不新开通道）。
@@ -142,4 +166,7 @@ interface AiBridge {
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-19 | 同步 Confirmed v2 标注冲突/无损去重/布局提示反馈；03 契约确认不改变本模块其余待定通信/UI 状态 |
+| 2026-10-15 | 补标注状态回传/展示：原索引与按条计数、全标注无效提示、布局 warning 与 partial 分离；桥接层不修改标注语义，缺合法锚点的内部错误保持 error |
+| 2026-10-15 | 对齐健壮性契约：04 解析、03 唯一校验、07 生命周期/原子提交；unknown 接口、诊断、仅非法标注 partial、失败保留旧图、过期请求与清空竞态；原通信/UI 待确认保留，整体仍 Draft |
 | 2026-10-12 | 初稿：确立 04→03 单一数据流、面板级通道、覆盖层生命周期与状态回传；确定"AI 只产 DSL、07 负责耦合"的分工，并为未来 AI 相关跨模块功能预留统一范式 |

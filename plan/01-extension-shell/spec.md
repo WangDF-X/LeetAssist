@@ -2,12 +2,13 @@
 
 - 状态：Confirmed
 - 关联阶段：Phase 1
-- 最后更新：2026-09-15
+- 最后更新：2026-10-19
 - 涉及代码目录：`src/background/`, `src/content/`, `src/panel/`（页内面板 React 应用）, `manifest.json`
 
 ## 1. 目标（In Scope）
 
-- 基于 Chrome Extension Manifest V3 搭建插件骨架，插件名称 **LeetAssist**，仅支持 **leetcode.cn**。
+- 基于 Chromium 扩展 Manifest V3 搭建插件骨架，插件名称 **LeetAssist**，同时支持 **Chrome 与 Microsoft Edge 当前稳定版**，站点仅支持 **leetcode.cn**。
+- 两浏览器共用代码与数据契约，优先同一构建产物；扩展 API/权限及 UI 实测遵守 `AGENTS.md` §3.5、§4.3 双浏览器规则。兼容差异集中适配，不散落业务判断；两端本地数据不自动互通。
 - **悬浮 logo 入口**：题目页注入一个悬浮 logo 按钮（插件默认激活态）；点击以弹簧动画展开主面板；关闭时反向收回 logo。
 - **页内悬浮主面板**（用户 2026-09-15 提供新 UI 设计后，替代原 Chrome Side Panel 方案）：左画板 + 右 Agent 的双栏布局，中间一条竖直工具栏；面板整体可像窗口一样拖边调节大小；拖动中间分隔线可调节画板与 Agent 的比例。
 - 中间竖直工具栏承载模块入口：**计时 / 数据 / 白板设置 / 模型配置**（第一版范围），点击各自弹出 popover 窗口展示对应内容。
@@ -157,6 +158,8 @@ interface ProblemMeta {
 - [ ] 题目信息获取失败时有明确错误提示，不空白不崩溃。
 - [ ] 面板与页面样式互不污染（Shadow DOM 验证），不破坏 LeetCode 页面布局与操作。
 
+- [ ] **Chrome/Edge 双端**：同一待发布构建在两款当前稳定版完成加载、页面注入、面板开关/resize、路由切题、主题与持久化冒烟；记录版本及结果，未验证端明确标记。用户目前观察基本正常属于初步反馈，不替代逐次受影响路径验收。
+
 ## 8. 实现决策记录
 
 - **manifest**（用户委托 Agent 决策；Side Panel 方案已废弃）：
@@ -187,6 +190,7 @@ interface ProblemMeta {
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-19 | 用户确认 Chrome/Edge 为共同目标；Manifest V3 共用产物优先，API/权限/行为兼容及双端验收联动 AGENTS.md |
 | 2026-09-12 | 根据总体规划文档整理出初稿 |
 | 2026-09-15 | 用户确认全部待确认问题；状态 Draft → Confirmed |
 | 2026-09-15 | V1 布局调整为两 Tab + 顶部计时条；ProblemMeta 增加 acceptanceRate；manifest 增加 notifications/optional_host_permissions |
