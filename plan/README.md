@@ -19,6 +19,8 @@
 
 程序化作图专项契约见 [`03-whiteboard/diagram-contract.md`](03-whiteboard/diagram-contract.md)：03 §4.6 的规范性补充，集中定义 DSL v2、Schema/语义校验、标注、诊断、预算和原子提交；2026-10-19 用户接受推荐方案后为 Confirmed，§10 是确认记录。04/07 整体仍按各自 spec 状态推进。
 
+Provider 请求与配置约定：01 提供主面板入口打开独立扩展配置页；02 管理可信 local 存储与无 Key 摘要；04 定义 Service Worker 请求代理、动态主机授权和 Port 流式生命周期；07 只接正常完成的作图输出，不承担网络代理。具体规则见 02 §3.5–3.6、04 §3.1/3.8。
+
 ## Spec 状态机
 
 ```
