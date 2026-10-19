@@ -62,6 +62,18 @@ export async function loadBindings(): Promise<WBBindings> {
   });
 }
 
+/** 判断画板快捷键是否应让行给编辑控件、输入法或其他已处理事件。 */
+export function shouldIgnoreShortcut(e: KeyboardEvent): boolean {
+  // window 监听器中的 target 会被 Shadow DOM 重定向为 host；检查真实事件路径。
+  // 229 是部分输入法在组合输入期间使用的兼容键码。
+  if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return true;
+  return e.composedPath().some(
+    (target) =>
+      target instanceof HTMLElement &&
+      (target.matches("input, textarea, select") || target.isContentEditable),
+  );
+}
+
 /** 判断键盘事件是否命中绑定（ctrl 含 mac Cmd；shift 必须精确匹配避免 Ctrl+Shift+Z 触发 Ctrl+Z） */
 export function matchKey(b: KeyBinding, e: KeyboardEvent): boolean {
   const keyOk = b.code ? e.code === b.key : e.key.toLowerCase() === b.key;

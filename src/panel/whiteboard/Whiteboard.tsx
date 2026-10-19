@@ -56,6 +56,7 @@ import {
   DEFAULT_BINDINGS,
   loadBindings,
   matchKey,
+  shouldIgnoreShortcut,
   type WBBindings,
 } from "./bindings";
 import {
@@ -840,8 +841,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!hoverRef.current) return; // 门控：不在画板区域不响应
       if (presetDialogRef.current) return; // 参数窗打开时不响应画板快捷键
-      const target = e.target as HTMLElement;
-      if (target.closest("textarea, input, [contenteditable]")) return; // 文本编辑中让行
+      if (shouldIgnoreShortcut(e)) return; // Shadow DOM 编辑控件、输入法和已处理事件让行
       const b = bindingsRef.current;
 
       if (matchKey(b.redo, e)) {
