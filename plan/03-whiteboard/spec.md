@@ -446,6 +446,8 @@ index.ts        # compileDiagram(unknown) -> CompileResult（补充规范 §5.2�
 
 **快捷键/鼠标门控（2026-09-21 补充，重要交互约束）**：上述所有快捷键与 Space 平移仅在**指针悬停于画布区域**时生效，且文本编辑进行中屏蔽工具切换快捷键——避免与 LeetCode Monaco 编辑器按键冲突（用户在代码里按 Delete / Ctrl+Z / Space 时绝不能误伤画板）。实现方式：跟踪画板 hover 状态作为所有快捷键的总开关。
 
+- **Shadow DOM 与输入法门控**：window 级 keydown 使用 composedPath 检查真实路径；input/textarea/select 与实际可编辑 contenteditable 区域内不触发画板命令，不能仅依赖被重定向后的 event.target。已 defaultPrevented、isComposing 或输入法兼容键码 229 的事件让行。keyup 仍可复位已按下的 Space，不因编辑门控卡住状态。Chrome/Edge 分别验证输入控件、Monaco 与中文输入法，正常画布快捷键保持有效。
+
 **文本编辑入口（2026-09-21 用户定；2026-09-22 扩展到图形 label）**：非选择态**双击**文本/矩形/椭圆进入编辑；选择态"点击出现边框后再点击"进入编辑（见 §5.4）；**新画完矩形/椭圆自动进入 label 编辑**（Esc/点外部空提交 = 跳过，图形保留）；右键快速输入保持有效（仍是独立文本）。
 
 **绑定可配置预留（2026-09-21 用户提）**：所有"键/鼠标动作 → 行为"映射集中在 `whiteboard/bindings.ts`（默认绑定 + `chrome.storage.local` 的 `wbBindings` 用户覆盖，工具键 tooltip 从配置反推），为后续"用户自定义快捷键/右键行为"设置页留口，新增时无需改交互代码。
@@ -527,6 +529,7 @@ index.ts        # compileDiagram(unknown) -> CompileResult（补充规范 §5.2�
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-19 | 快捷键门控修复：通过 composedPath 识别 Shadow DOM 内编辑控件，输入法组合及已处理事件让行；保留 Space keyup 复位，增加 Chrome/Edge 手工验证路径 |
 | 2026-10-19 | 用户接受推荐方案，专项 Confirmed；主 spec 同步 DSL v2、binary left/right、必填 variant、空树与无 gap 的锚点联合、确认记录及验收 |
 | 2026-10-15 | 补充标注专项规范入口及验收，明确 window 几何依据完整语义范围而非任意两端点 box；新建议的能力/组合规则保持待确认 |
 | 2026-10-15 | 用户确认健壮性策略；新增 diagram-contract.md 作为 §4.6 规范性补充，定义分区校验、主体严格/标注容错、结构化结果、预算、IR 后置检查、原子提交和测试；同步图元库 toStructure 接口与落层说明；未讨论语义单列待确认 |
