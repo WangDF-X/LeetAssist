@@ -1,9 +1,9 @@
 # 04. AI Assistant（BYOK AI 助手）Spec
 
-- 状态：Draft（本模块模式清单待定，见第 8 节；作图还依赖 03 健壮性专项契约与 07 的待确认边界）
+- 状态：Draft（模式清单及请求运行阈值待定，见第 8 节；SW 代理/独立配置页方向已确认；作图接线仍受 07 状态约束）
 - 关联阶段：Phase 3
 - 最后更新：2026-10-19
-- 涉及代码目录：`src/ai/provider.ts`, `src/ai/openai-compatible.ts`, `src/ai/anthropic.ts`, `src/ai/prompt.ts`, `src/panel/agent/`
+- 涉及代码目录：`src/ai/`（协议适配与请求契约）、`src/background/`（请求执行）、`src/options/`（独立扩展设置页）、`src/panel/agent/`（展示与命令客户端）
 
 ## 1. 目标（In Scope）
 
@@ -16,7 +16,7 @@
 - **对话记录完整保留，一个题目可以有多个对话**（覆盖此前"只存摘要卡片"的方案，用户 2026-09-15 更新）；体积控制靠上下文快照去重（见 3.3）。
 - 模式选择器（草稿清单，**最终清单待定**，见第 8 节）：给提示 / 分析目前我的思路 / 自由提问 / 完整分析 / 分析我的思路并给出建议。
 - 请求失败：清晰提示、不自动重试、用户提示词不消失、手动 [重试]。
-- 权限方案 B：保存 Base URL 后运行时动态申请该域名权限 + 连通性验证；拒绝则提醒不可用。
+- 权限方案 B：独立扩展配置页点击保存并授权，仅申请目标主机权限，授权后经 SW 测试；拒绝保留草稿并显示未授权。
 - V1 协议：OpenAI-compatible + Anthropic 原生（方案 a 已确认）。
 
 ## 2. 明确不做
@@ -29,9 +29,34 @@
 
 ## 3. 详细需求
 
-### 3.1 流式实现位置
+### 3.1 请求执行：Service Worker 代理（2026-10-19 确认）
 
-流式 fetch 在面板页面（content script 注入的 React 应用）内执行，不放 Service Worker（MV3 SW 空闲回收会掐断长流）；SSE 逐块读取渲染。跨域由 host 权限保障。
+**主面板设置/模型配置入口 → 打开独立扩展配置页 → Service Worker 统一执行请求。** 配置页是扩展自身 URL 下的页面，不是力扣 Shadow DOM 内的表单；可在浏览器窗口/标签页展示，具体窗口尺寸不属于本契约。
+
+```text
+独立扩展配置页 ── 保存配置/申请主机权限 ──▶ 扩展本地存储
+                                                        │
+页内 AI 面板 ── providerId + 消息 + requestId ──▶ Service Worker
+             ◀── started / delta / usage / done / error ──┤
+                                                        └─ fetch → 用户配置的 Provider
+```
+
+- Content Script 的请求仍受网页来源跨域约束，Shadow DOM 不改变安全来源；**不得依赖 host 权限让页内 fetch 绕过 CORS**。Provider fetch、认证头组装及 SSE 解析放在扩展 Service Worker；面板只渲染统一事件。力扣同源题目信息读取不受此调整影响。
+- 本地执行，无自建服务器。使用已授权主机访问能力，不采用 no-cors、修改网站 CORS 头或第三方转发服务。
+- 面板提交语义命令，不提交任意 URL、认证头或 API Key。后台依据 providerId 读取配置、构造协议端点；只接受明确允许的模型参数，不透传任意 fetch options。
+- 校验 runtime sender 的扩展身份、允许的页面/顶层 frame、tab/document 及消息结构。请求归属绑定真实 sender 与连接，不相信消息自报的 tabId；取消只能作用于本连接拥有的请求。设置写入/凭据操作仅允许独立扩展配置页；不开放网页外部消息或 window.postMessage 网络代理。
+- Base URL 仅 HTTPS，拒绝内嵌用户名/密码、fragment 及含认证信息的查询参数；认证仅由适配器组装。按 URL 规则拼接相对端点并复查目标，不能让前端路径覆盖成另一主机。不接受跨主机重定向；首版采用 redirect:error，提示填写最终地址；credentials:omit，不附带网站 Cookie。
+
+#### 3.1.1 流式通道与状态
+
+- 使用 runtime.connect 的 Port 传输 JSON 可序列化事件；不跨通道传 Response、ReadableStream 或 AbortController。设置读写等短命令使用受控一次性消息。
+- 开始命令包含 providerId、requestId、problemId、conversationId、messages 和受限 options；后台记录发送者文档/连接与配置快照，返回 started，再按顺序发送 delta/usage 与终态。事件带 requestId 和单调序号；不重复拼接、不广播给其他标签页。队列/分块大小必须有界，不逐字符刷消息。
+- 状态为 starting → streaming → done，或任一运行态 → error/cancelled/interrupted；每个请求至多一个终态。正常完成必须由 Provider 协议明确判定；裸 EOF、截断或协议报错不能冒充 done。usage 可缺失，不伪造用量/费用。
+- cancel 使用后台 AbortController 中止 fetch/reader；Port 断开、页面卸载或目标文档失效取消其请求并清理资源。面板关闭/切题时客户端主动取消本轮；切换显示不能把旧结果绑定到新会话。面板保留已接收文字并标记中断，不自动重发、不自动断点续传。
+- 请求中删除 Provider、更换其主机/Key、撤销主机权限时，中止相关请求，更新可用状态；不能在同一流中换配置。新请求重新读取配置及权限。
+- **Port 开着不等于 Worker 永不回收**。仅在有效请求期间使用有界心跳/活动维持与超时监测，请求结束停止；不永久保活、不依赖 DevTools。分别设置响应等待、流空闲、总时长及并发/消息预算；具体阈值实现前按 §8 确认。
+- Chrome 文档列有约 30 秒空闲、fetch 响应到达等待及普通任务约 5 分钟等生命周期边界；活动消息不能承诺绕过所有限制。Worker 意外终止由客户端断连/看门狗判为 interrupted，保留文本并允许手动重试，不将付费请求静默重放。超长思考模型须双端实测，不能承诺任意时长。
+- SSE 按 UTF-8 增量解码与事件边界解析，处理跨 chunk 中文字符、多行 data、注释/空事件及最终结束标志；OpenAI-compatible/Anthropic 适配为统一事件。HTTP 非成功、协议错误、网络中断、权限拒绝、取消与超时分别给安全错误码，不透传响应头、原始认证信息或可能回显 Key 的错误体。
 
 ### 3.2 上下文组装
 
@@ -123,17 +148,20 @@
 
 ### 3.7 Anthropic 原生适配器要点（方案 a，已确认）
 
-- 端点：`POST https://api.anthropic.com/v1/messages`；认证头 `x-api-key` + `anthropic-version: 2023-06-01`。
+- 端点：用户配置 Base URL 下的 `POST /v1/messages`（官方预置为 `https://api.anthropic.com`）；认证头由 Service Worker 组装 `x-api-key` + `anthropic-version: 2023-06-01`，不得绕过用户 Base URL 硬编码目标。
 - system 走请求体独立 `system` 字段；`max_tokens` 必填（默认 4096）。
 - 流式 SSE 事件 `message_start` / `content_block_delta`（`delta.text`）/ `message_delta`（usage）映射为统一流式块与 `ChatResponse.usage`。
 - 错误码（401/429/529 等）映射统一失败提示，复用失败态 UI。
 
 ### 3.8 权限流程（方案 B）
 
-1. 保存 Provider（含 baseUrl）时 `chrome.permissions.contains` 检查；未授权则在用户手势回调里 `chrome.permissions.request({ origins: [origin] })`。
-2. 授权后自动连通性验证（最小请求），展示通过/失败。
-3. 拒绝授权：提醒"未授予对该域名的访问权限，LeetAssist 无法向此 Provider 发送请求，AI 功能不可用"，保留重新授权入口。
-4. manifest 已声明 `optional_host_permissions: ["https://*/*"]`（安装时无警告）。
+1. 用户从主面板入口打开扩展配置页，在其中输入/替换 Key 与配置；页内面板仅取无密钥摘要（providerId/name/model/hasApiKey/授权状态），不读取已保存 Key。
+2. manifest 保留 optional_host_permissions: ["https://*/*"]，这是运行时可申请范围，不等于安装时已获所有 HTTPS 主机访问权。只对用户选定目标申请，例如 https://api.example.com/*，不申请所有主机/子域通配。
+3. 配置页显示实际目标主机和权限状态，用户点击“保存并授权”时在该可信页面的用户手势内调用 permissions.request；不要依赖多层异步转发保留手势。已授权可跳过提示，拒绝则保存配置草稿并显示未授权，不发测试或聊天请求。
+4. 主机权限按浏览器 match pattern 生效，不能精确限制 API 路径/端口；后台另校验完整配置来源（scheme/host/port）与允许端点。每次请求重新 contains 检查，不能仅依赖配置里的历史 granted 标记。
+5. 授权成功后由后台做最小连通性测试，UI 说明测试可能产生少量调用费用；失败不自动重试。改目标后重新检查/申请；重定向不额外自动授权。
+6. 监听权限撤销并中止相关请求；删除/改 Provider 后，仅当其他 Provider 不再共用该主机授权时移除不再需要的可选权限，不影响力扣基础权限。浏览器撤权/重新授权行为在 Chrome/Edge 分别验证。
+7. Key 与存储访问限制遵循 02 §3.5–3.6；设置页不将已存 Key 回填给页内 UI，替换通过明确写入操作完成；导入配置不等于导入浏览器授权，使用前仍须手动授权。
 
 ### 3.9 AI 作图：输出语义 DSL（不产出坐标）
 
@@ -182,6 +210,7 @@ interface ProviderConfig {
   id: string;
   name: string;
   baseUrl: string;
+  protocol: "openai-compatible" | "anthropic";
   apiKey: string;      // 明文 + 常驻提醒，见 02-storage 3.5
   model: string;
   contextWindow?: number;
@@ -189,6 +218,12 @@ interface ProviderConfig {
   priceOutput?: number;
   currency?: "CNY" | "USD";
 }
+
+// ProviderConfig 仅可信扩展上下文使用；Content Script 不接收此类型的完整对象。
+type ProviderSummary = Omit<ProviderConfig, "apiKey"> & {
+  hasApiKey: boolean;
+  permissionState: "granted" | "required"; // 按当前实际权限计算，不以此代替后台检查
+};
 
 interface Conversation {
   id: string;
@@ -234,11 +269,12 @@ interface ConversationMessage {
 - 历史入口 popover：该题对话列表（标题/更新时间/消息数）+ [新建对话]。
 - 模型选择下拉：已配置 Provider×Model 列表；圆环 hover 显示 tokens 明细。
 - 失败态：红色错误条 + 原因摘要 + [重试]；用户提示词保留可见。
+- 主面板设置/模型配置入口打开独立扩展配置页，输入凭据、保存授权与连接测试在该页完成；面板模型下拉只显示安全摘要。配置页使用同源主题 token，不在力扣页面 DOM 存放凭据表单。
 
 ## 6. 依赖
 
 - 依赖的其他 spec：01-extension-shell（ProblemMeta、面板容器、optional_host_permissions）、02-storage（Provider/对话/代码快照持久化）、05-timer（超时触发"完整分析"）
-- 依赖的第三方库：无强制（fetch 直连 + 自解析 SSE）
+- 依赖的第三方库：无强制（SW 内 fetch 直连 Provider + 协议适配/SSE 解析；无远程代理服务）
 
 ## 7. 验收标准
 
@@ -249,6 +285,10 @@ interface ConversationMessage {
 - [ ] 保存 Provider 触发方案 B 权限申请与连通性验证；拒绝有提醒与重试入口。
 - [ ] 预置七项快捷填入可用；Anthropic 走原生适配器可正常流式对话。
 - [ ] API Key 只发往用户配置的 Base URL。
+- [ ] 请求只在 Service Worker 执行；面板消息无 Key/任意 URL/认证头；校验发送者、文档、连接及命令字段，不存在通用 fetch 代理。
+- [ ] 独立扩展配置页由主面板入口打开；未添加 Provider 不申请其权限，拒绝不请求网络；变更/共用主机/删除/撤权/导入配置的权限语义正确。
+- [ ] Port 事件有请求身份、稳定顺序和唯一终态；SSE 分块/中文/多行及协议结束正常；裸 EOF 不算完成。取消/断连/切题/卸载/Worker 重启保留部分回复且不自动重发。
+- [ ] DevTools 关闭时双端验证延迟响应、流空闲、长流、并发预算、权限撤销、拒绝重定向以及 Key/配置变更；异常不泄露 Key/代码或原始错误体。
 - [ ] **作图载荷**：唯一且完整，大小有界，标准 JSON；正常流结束前、取消/截断/多候选时不提交；无裸坐标/语法修补降级。
 - [ ] **双重约束**：结构化输出可按 Provider 能力启用，文本通道仍可用；所有输入以 unknown 走本地分区校验；合法示例和失败用例覆盖两通道。
 - [ ] **作图状态**：主体非法整图失败保留旧图；标注非法按条 partial，安全诊断与计数可见；无自动纠错/自动重试请求。
@@ -260,11 +300,13 @@ interface ConversationMessage {
 作图结构/标注/预算已于 2026-10-19 确认，见 [03 契约 §10 确认记录](../03-whiteboard/diagram-contract.md#10-协议细节确认记录)；本模块模式清单及 07 的 UI/通信边界仍待各自确认。
 
 - [ ] **模式选择器的最终模式清单**（用户 2026-09-15：列出的几个模式还没完全理清楚，作为部分待定）。当前草稿清单：给提示 / 分析目前我的思路 / 自由提问 / 完整分析 / 分析我的思路并给出建议（"帮我找 Bug"是否保留亦在整理范围内）。V1 先按草稿清单实现，用户理清后调整（prompt 模板已具备，调整成本低）。
+- [ ] **请求运行阈值**：响应等待/流空闲/总时长、仅请求期间心跳周期、并发数、命令及流事件/缓冲大小。代理架构及失败行为已确认；数值结合浏览器生命周期与长思考模型测试后确认，再写正式请求实现，不猜测无限保活。
 
 ## 9. 变更记录
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-19 | 用户确认主面板入口打开独立扩展 Provider 配置页；改为 SW 受控请求代理、Port 流、Key 隔离与按需主机授权，定义取消/异常终止/无自动重发/安全错误；具体运行阈值列待确认，整体仍 Draft |
 | 2026-10-19 | 对齐 Confirmed DSL v2、标注能力/纯文本/预算、树示例与简单关系限制；不因作图契约确认而自动确认模式 UI |
 | 2026-10-15 | 补标注生成与示例约定：按 03 §4.3 区分四种用途/标题/关系，显式身份与能力表、不输出布局字段；未确认标注建议不进入生产提示词 |
 | 2026-10-15 | 细化 §3.9 健壮性：Schema 同源、Provider 可选结构化约束与本地必校验、唯一完整载荷、流结束后提交、unknown 边界、仅非法标注 partial、安全诊断和手动重试；整体仍 Draft，模式清单未定 |
