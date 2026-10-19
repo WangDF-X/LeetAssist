@@ -503,6 +503,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const elementsRef = useRef(elements);
   elementsRef.current = elements;
   const spaceRef = useRef(false);
+  const activePointerRef = useRef<number | null>(null);
   const hoverRef = useRef(false);
   const justDraggedRef = useRef(false); // 刚完成拖动：用于忽略紧随的 click
   const toolRef = useRef(tool);
@@ -887,6 +888,11 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === bindingsRef.current.pan) {
+        const stage = stageRef.current;
+        if (stage?.isDragging()) {
+          stage.stopDrag();
+          setView((v) => ({ ...v, offsetX: stage.x(), offsetY: stage.y() }));
+        }
         spaceRef.current = false;
         setPanning(false);
       }
@@ -898,23 +904,6 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       window.removeEventListener("keyup", onKeyUp);
     };
   }, [undo, redo, deleteSelected, copySelection, pasteClipboard, duplicateSelection]);
-
-  // 兜底：在画布外松开指针时，结束"整体移动"手势（舞台收不到 pointerup）
-  useEffect(() => {
-    const onWinUp = () => {
-      const mv = moveRef.current;
-      if (!mv) return;
-      moveRef.current = null;
-      setDraggingId(null);
-      if (mv.moved) {
-        justDraggedRef.current = true;
-        historyRef.current.push(mv.before);
-        setHistoryTick((t) => t + 1);
-      }
-    };
-    window.addEventListener("pointerup", onWinUp);
-    return () => window.removeEventListener("pointerup", onWinUp);
-  }, []);
 
   // ---------- 视图（缩放/平移） ----------
 
@@ -1114,7 +1103,9 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     [draft, epDrag, marquee, toWorld, findBindableAt],
   );
 
-  const onPointerUp = useCallback(() => {
+  const onPointerUp = useCallback((event: Konva.KonvaEventObject<PointerEvent>) => {
+    // Konva 对 pointercancel 也可能补发 pointerup，不能把取消当作正常提交。
+    if (event.evt.type === "pointercancel" || event.evt.type === "touchcancel") return;
     // 框选收尾
     if (marquee) {
       const m = marquee;
@@ -1539,6 +1530,63 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     commitElements(next);
   }, [commitElements]);
 
+  // 中断不是正常 pointerup：不提交草稿或端点预览，已实时写入的移动只记一次历史。
+  const interruptGesture = useCallback(() => {
+    activePointerRef.current = null;
+    spaceRef.current = false;
+    hoverRef.current = false;
+    setPanning(false);
+    const stage = stageRef.current;
+    if (stage?.isDragging()) {
+      stage.stopDrag();
+      setView((v) => ({ ...v, offsetX: stage.x(), offsetY: stage.y() }));
+    }
+    const transformer = trRef.current;
+    if (transformer?.isTransforming()) {
+      // Konva stopTransform 同步发 transformend，由既有回调提交且归一化节点。
+      transformer.stopTransform();
+    }
+    const mv = moveRef.current;
+    moveRef.current = null;
+    if (mv?.moved) {
+      historyRef.current.push(mv.before);
+      setHistoryTick((t) => t + 1);
+    }
+    justDraggedRef.current = false; // 取消不会产生需要吞掉的正常 click
+    setDraggingId(null);
+    setDraft(null);
+    setEpDrag(null);
+    setSnapTargetId(null);
+    setMarquee(null);
+    if (containerRef.current) containerRef.current.style.cursor = "";
+  }, []);
+
+  useEffect(() => {
+    const onUp = (e: PointerEvent) => {
+      if (activePointerRef.current !== e.pointerId) return;
+      activePointerRef.current = null;
+      // 画布内正常松手由 Konva 提交；画布外只保留实时变更、丢弃预览。
+      const canvas = stageRef.current?.content;
+      if (!canvas || !e.composedPath().includes(canvas)) interruptGesture();
+    };
+    const onCancel = (e: PointerEvent) => {
+      if (activePointerRef.current === e.pointerId) interruptGesture();
+    };
+    const onVisibility = () => {
+      if (document.hidden) interruptGesture();
+    };
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", interruptGesture);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", interruptGesture);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [interruptGesture]);
+
   // 草稿预览元素
   const draftElement: WBElement | null = useMemo(() => {
     if (!draft) return null;
@@ -1684,10 +1732,26 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         <div
           ref={containerRef}
           className="la-wb-stage"
+          onPointerDownCapture={(e) => {
+            if (e.button === 0 && e.target instanceof HTMLCanvasElement) {
+              activePointerRef.current = e.pointerId;
+              hoverRef.current = true;
+              justDraggedRef.current = false;
+            }
+          }}
+          onPointerMove={() => {
+            // 返回窗口后无需移出再移入才能恢复 hover 快捷键。
+            hoverRef.current = true;
+          }}
           onMouseEnter={() => (hoverRef.current = true)}
           onMouseLeave={() => {
             hoverRef.current = false;
             spaceRef.current = false;
+            const stage = stageRef.current;
+            if (stage?.isDragging()) {
+              stage.stopDrag();
+              setView((v) => ({ ...v, offsetX: stage.x(), offsetY: stage.y() }));
+            }
             setPanning(false);
             setMarquee(null); // 指针移出画布：中止框选，避免残留
           }}
