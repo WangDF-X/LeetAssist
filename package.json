@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run check:theme && vite build",
+    "build": "npm run check:theme && npm run check:dsl && vite build",
     "typecheck": "tsc --noEmit",
-    "check:theme": "node scripts/check-theme.mjs"
+    "check:theme": "node scripts/check-theme.mjs",
+    "check:dsl": "esbuild scripts/check-dsl-schema.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/check-dsl.mjs && node node_modules/.cache/check-dsl.mjs",
+    "test:dsl": "esbuild scripts/dsl-tests.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/dsl-tests.mjs && node node_modules/.cache/dsl-tests.mjs"
   },
   "dependencies": {
     "dexie": "^4.4.6",

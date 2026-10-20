@@ -2,7 +2,7 @@
 // - 数字参数用可加减数字框（含 min/max）；二值用开关。
 // - 确认时按参数定义 clamp，避免越界值。
 // - 渲染在画布容器内、绝对定位居中；指针事件不冒泡到画布。
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { WBPreset, WBPresetParam } from "./presets";
 import { defaultParams } from "./presets";
 
@@ -87,6 +87,14 @@ export function ParamDialog({ preset, onConfirm, onCancel }: ParamDialogProps) {
   const setField = (key: string, v: number | boolean) =>
     setParams((p) => ({ ...p, [key]: v }));
 
+  // 链表单节点环形在 v2 非法：UI 直接禁用并回写 false，避免"开关显示开但生成非环形"。
+  const circularBlocked =
+    preset.id === "linkedlist" && Number(params.count) === 1;
+  useEffect(() => {
+    if (circularBlocked && params.circular === true)
+      setParams((p) => ({ ...p, circular: false }));
+  }, [circularBlocked, params.circular]);
+
   const emit = () => {
     const cleaned: Record<string, number | boolean> = {};
     for (const p of preset.params) {
@@ -140,18 +148,29 @@ export function ParamDialog({ preset, onConfirm, onCancel }: ParamDialogProps) {
                 onChange={(v) => setField(p.key, v)}
               />
             ) : (
-              <div className="la-param-row" key={p.key}>
-                <span className="la-param-label">{p.label}</span>
-                <button
-                  type="button"
-                  className="la-param-toggle"
-                  data-active={params[p.key] === true}
-                  aria-pressed={params[p.key] === true}
-                  onClick={() => setField(p.key, !(params[p.key] === true))}
-                >
-                  <span className="la-param-knob" />
-                </button>
-              </div>
+              (() => {
+                const blocked = p.key === "circular" && circularBlocked;
+                return (
+                  <Fragment key={p.key}>
+                    <div className="la-param-row">
+                      <span className="la-param-label">{p.label}</span>
+                      <button
+                        type="button"
+                        className="la-param-toggle"
+                        data-active={params[p.key] === true}
+                        aria-pressed={params[p.key] === true}
+                        disabled={blocked}
+                        onClick={() => setField(p.key, !(params[p.key] === true))}
+                      >
+                        <span className="la-param-knob" />
+                      </button>
+                    </div>
+                    {blocked && (
+                      <div className="la-param-hint">单节点不支持环形，已自动关闭</div>
+                    )}
+                  </Fragment>
+                );
+              })()
             ),
           )}
         </div>

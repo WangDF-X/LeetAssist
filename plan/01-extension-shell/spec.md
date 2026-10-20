@@ -174,6 +174,10 @@ interface ProblemMeta {
     "permissions": ["storage", "notifications"],
     "host_permissions": ["https://leetcode.cn/*"],
     "optional_host_permissions": ["https://*/*"],
+    "options_ui": {
+      "page": "src/options/index.html",
+      "open_in_tab": true
+    },
     "content_scripts": [
       {
         "matches": ["https://leetcode.cn/problems/*"],
@@ -186,7 +190,7 @@ interface ProblemMeta {
     ]
   }
   ```
-  说明：`storage` 用于配置持久化；`notifications` 用于计时到时通知（05）；`host_permissions` 仅 leetcode.cn；`optional_host_permissions` 供 04-ai-assistant 运行时按用户填写的 AI Base URL 动态申请（方案 B，安装时无警告）；`web_accessible_resources` 供 Shadow DOM 加载扩展内样式/资源。
+  说明：`storage` 用于配置持久化；`notifications` 用于计时到时通知（05）；`host_permissions` 仅 leetcode.cn；`optional_host_permissions` 供 04-ai-assistant 运行时按用户填写的 AI Base URL 动态申请（方案 B，安装时无警告）；`options_ui` 声明独立扩展配置页（04 §3.1/3.8，构建需提供 `src/options/index.html` 入口），主面板"模型配置"入口打开该页；`web_accessible_resources` 供 Shadow DOM 加载扩展内样式/资源。
 - **构建工具链**：Vite + `@crxjs/vite-plugin`（理由见历史记录：Vite 生态最活跃的扩展打包插件，自动处理 manifest/多入口/Content Script 热更新）。
 - **图标**：源文件 `plan/assets/logo.png`，实现时切 16/32/48/128 尺寸；悬浮 logo 复用同一视觉。
 
@@ -195,6 +199,7 @@ interface ProblemMeta {
 | 日期 | 修改内容 |
 |---|---|
 | 2026-10-19 | 面板/logo/resize/比例手势增加 pointerId 过滤、取消/失焦/隐藏收尾与卸载清理；取消不触发 logo 点击展开，新增窗口手势生命周期回归测试 |
+| 2026-10-19 | §8 manifest 补 `options_ui`（独立扩展配置页入口，构建需提供 `src/options/index.html`）；与 04 §3.1/3.8 对齐 |
 | 2026-10-19 | 用户确认主面板设置入口→独立扩展 Provider 页；更新原“模型 popover”设计，定义设置页/消息骨架与 SW 请求、可信存储职责分界 |
 | 2026-10-19 | 用户确认 Chrome/Edge 为共同目标；Manifest V3 共用产物优先，API/权限/行为兼容及双端验收联动 AGENTS.md |
 | 2026-09-12 | 根据总体规划文档整理出初稿 |

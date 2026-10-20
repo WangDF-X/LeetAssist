@@ -309,6 +309,25 @@ ${THEME_VARS_CSS}
   z-index: 4;
   white-space: nowrap;
 }
+/* 100KB 存储目标提示（软提示，不阻断保存） */
+.la-wb-storage-warn {
+  position: absolute;
+  left: 50%;
+  bottom: 76px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  border: 1px solid var(--la-danger);
+  border-radius: 8px;
+  background: var(--la-surface);
+  box-shadow: var(--la-shadow-pop);
+  color: var(--la-text);
+  font-size: 12px;
+  z-index: 4;
+}
 /* 图元库参数弹窗（画板居中，§5.1） */
 .la-param-overlay {
   position: absolute;
@@ -385,6 +404,8 @@ ${THEME_VARS_CSS}
   transition: background 0.15s ease;
 }
 .la-param-toggle[data-active="true"] { background: var(--la-accent); }
+.la-param-toggle:disabled { opacity: 0.45; cursor: default; }
+.la-param-hint { margin-top: -4px; font-size: 11px; color: var(--la-text-dim); }
 .la-param-knob {
   position: absolute;
   top: 2px;

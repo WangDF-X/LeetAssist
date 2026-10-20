@@ -5,7 +5,9 @@
 // - 校验管线（§4.4）：所有外部输入（加载存储 / 未来 LLM 输出）都过 sanitizeElements，
 //   非法元素丢弃计数、字段 clamp、未知字段剥离、缺 id 自动生成。
 
+import { compressToUint8Array } from "lz-string";
 import type { WBColorId, WBWidthId } from "../theme";
+import { LIMITS } from "./dsl/limits";
 
 export interface WBElementBase {
   id: string;
@@ -118,10 +120,11 @@ export function genId(prefix = ""): string {
 
 // ---------- 校验管线（§4.4） ----------
 
-const MAX_COORD = 100000;
-const MAX_SIZE = 100000;
-const MIN_FONT = 8;
-const MAX_FONT = 72;
+const MAX_COORD = LIMITS.coord;
+const MAX_SIZE = LIMITS.size;
+const MIN_FONT = LIMITS.fontMin;
+const MAX_FONT = LIMITS.fontMax;
+const MAX_ID_LEN = LIMITS.textField;
 const MAX_POINTS = 4000; // 单条 path 点位上限（抽稀后仍异常庞大则截断）
 
 function num(v: unknown): v is number {
@@ -140,6 +143,12 @@ function clampSize(n: number): number {
   return clampNum(n, 0, MAX_SIZE);
 }
 
+/** 按 Unicode 码点截断，避免把非 BMP 字符切成半个代理对（contract §6）。 */
+function sliceCodePoints(s: string, max: number): string {
+  const chars = [...s];
+  return chars.length <= max ? s : chars.slice(0, max).join("");
+}
+
 function toColorId(v: unknown): WBColorId {
   return COLOR_IDS.includes(v as WBColorId) ? (v as WBColorId) : "default";
 }
@@ -155,7 +164,7 @@ function baseOf(
   return {
     id:
       typeof raw.id === "string" && raw.id.length > 0
-        ? raw.id.slice(0, 64)
+        ? sliceCodePoints(raw.id, MAX_ID_LEN)
         : genId(overlay ? "ov-" : ""),
     color: toColorId(raw.color),
     width: toWidthId(raw.width),
@@ -179,7 +188,7 @@ function toBox(raw: Record<string, unknown>) {
   };
 }
 
-const MAX_LABEL_LEN = 200;
+const MAX_LABEL_LEN = LIMITS.textField;
 
 const ARROWHEADS: readonly WBArrowhead[] = ["none", "start", "end", "both"];
 
@@ -195,11 +204,11 @@ function toConnects(
   const raw = v as Record<string, unknown>;
   const from =
     typeof raw.from === "string" && raw.from.length > 0
-      ? raw.from.slice(0, 64)
+      ? sliceCodePoints(raw.from, MAX_ID_LEN)
       : undefined;
   const to =
     typeof raw.to === "string" && raw.to.length > 0
-      ? raw.to.slice(0, 64)
+      ? sliceCodePoints(raw.to, MAX_ID_LEN)
       : undefined;
   if (!from && !to) return {};
   if (from && to && from === to) return {}; // 自连非法 → 剥离（元素保留）
@@ -212,7 +221,7 @@ function toLabelProps(raw: Record<string, unknown>): {
   labelSize?: number;
 } {
   if (typeof raw.label !== "string") return {};
-  const label = raw.label.slice(0, MAX_LABEL_LEN);
+  const label = sliceCodePoints(raw.label, MAX_LABEL_LEN);
   if (label.trim() === "") return {};
   const size = num(raw.labelSize)
     ? clampNum(Math.round(raw.labelSize), MIN_FONT, MAX_FONT)
@@ -325,7 +334,7 @@ export function sanitizeElements(
           type: "text",
           x: clampCoord(raw.x),
           y: clampCoord(raw.y),
-          text: raw.text.slice(0, 2000),
+          text: sliceCodePoints(raw.text, 2000),
           size: num(raw.size)
             ? clampNum(Math.round(raw.size), MIN_FONT, MAX_FONT)
             : 16,
@@ -379,6 +388,18 @@ export function serializeScene(scene: WhiteboardScene): string {
       ? Math.round(value * 10) / 10
       : value,
   );
+}
+
+/**
+ * 单题全部画板内容（elements + overlay）lz-string 压缩后的字节数。
+ * 100KiB 是软目标：超限提示但不阻断保存（03 spec §4.5、contract §6）。
+ */
+export function sceneStorageBytes(scene: WhiteboardScene): number {
+  return compressToUint8Array(serializeScene(scene)).length;
+}
+
+export function isSceneOverStorageLimit(scene: WhiteboardScene): boolean {
+  return sceneStorageBytes(scene) > LIMITS.storageBytes;
 }
 
 /** 反序列化：parse 失败返回 null，成功后过校验管线 */

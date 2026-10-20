@@ -2,12 +2,12 @@
 
 - 状态：Draft（模式清单及请求运行阈值待定，见第 8 节；SW 代理/独立配置页方向已确认；作图接线仍受 07 状态约束）
 - 关联阶段：Phase 3
-- 最后更新：2026-10-19
+- 最后更新：2026-10-20
 - 涉及代码目录：`src/ai/`（协议适配与请求契约）、`src/background/`（请求执行）、`src/options/`（独立扩展设置页）、`src/panel/agent/`（展示与命令客户端）
 
 ## 1. 目标（In Scope）
 
-- BYOK：用户配置 Provider（Name / Base URL / API Key / Model / 上下文窗口 / 价格），可多个；预置快捷项见 3.6。
+- BYOK：用户配置 Provider（Name / Protocol / Base URL / API Key / Model / 上下文窗口 / 价格），可多个；预置快捷项见 3.6。
 - Agent 区界面（对标主流 Agent 客户端形态，依据用户 mockup）：
   - 头部：**对话标题直接从网页读取**（题号 + 题目 + 难度），不用 LLM 总结；旁有对话历史入口（该题的多个对话列表 + 新建对话）。
   - 消息流：流式渲染回复。
@@ -134,15 +134,15 @@
 
 ### 3.6 预置 Provider 快捷项
 
-| 预置名 | Base URL | 示例 Model | 上下文窗口预填 |
-|---|---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | 128K |
-| Anthropic | `https://api.anthropic.com`（原生协议，专用适配器） | `claude-3-5-haiku-latest`（以官方当前为准） | 200K |
-| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.0-flash` | 1M |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` | 64K |
-| GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 128K |
-| Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-32k` | 32K |
-| Qwen | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 128K |
+| 预置名 | Protocol | Base URL | 示例 Model | 上下文窗口预填 |
+|---|---|---|---|---|
+| OpenAI | `openai-compatible` | `https://api.openai.com/v1` | `gpt-4o-mini` | 128K |
+| Anthropic | `anthropic`（原生协议，专用适配器） | `https://api.anthropic.com` | `claude-3-5-haiku-latest`（以官方当前为准） | 200K |
+| Gemini | `openai-compatible` | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.0-flash` | 1M |
+| DeepSeek | `openai-compatible` | `https://api.deepseek.com` | `deepseek-chat` | 64K |
+| GLM | `openai-compatible` | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 128K |
+| Kimi | `openai-compatible` | `https://api.moonshot.cn/v1` | `moonshot-v1-32k` | 32K |
+| Qwen | `openai-compatible` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 128K |
 
 （URL/模型名为当前公开信息，实现时以官方文档为准；用户可改；其余自定义。）
 
@@ -175,7 +175,7 @@
 - **取值来源**：题面（`ProblemMeta`）与可选 `@code` 快照；值（数组内容、结点值等）来自题意，模型负责"填语义"。
 - **标注生成约定**：遵守 [03 契约 §4.3](../03-whiteboard/diagram-contract.md#43-标注专项约定)；四种用途、标题与主体关系区分，引用按 ID，不输出位置/字号/车道。v2 不提供 gap/边/链表内部值格锚点；window 只用数组闭区间/矩阵闭矩形，被引用链表/树节点须显式 ID。
 - **标注示例维护**：补同位 i/j、范围两端、局部/全局 note 的可编译正例；纯文本及长度按契约，不教模型靠越界/冲突获得省略效果。树示例使用必填 variant 与 left/right 或 children，所有载荷版本为 2。
-- **能力提示**：明确允许空结构、零柱、不验堆序；图/状态机不支持自环/平行/反向双边，负柱拒绝；不能教模型将不支持关系合并/删除后冒充原图。limits 与错误码同源。
+- **能力提示**：明确允许空结构、零柱、不验堆序；图/状态机**仅拒绝同方向重复边/转移**，允许自环（图有向/无向均可）与有向反向边（静态环线/偏移渲染），负柱拒绝；多叉树 `children` 可含 `null` 表示缺位，但不得把 null 当成 value=null 的真实节点；map 的 `null` 键只表示未填写占位，不得把 null 当作真实键。不能教模型将重复关系合并/删除后冒充原图。limits 与错误码同源。
 - **Provider 输出约束**：适配器明确支持结构化输出时，可用同源 Schema 约束一个图载荷；不得假定所有 OpenAI-compatible 端点具备相同能力。具体 API 参数在实现时核对对应 Provider 文档，本 spec 不绑定某厂商接口。能力不支持可走文本通道，不因此自动额外请求。
 - **解析与失败处理**：
   1. 等待流正常完整结束后才提取载荷；取消/中断/截断回复不提交，即使之前已出现可解析块。流内容可展示，不增量绘制。
@@ -184,7 +184,7 @@
   4. 主体错误为 error，不提交、保留旧图；单条标注非法才允许 partial，完整绘制主体/有效标注，并明确提示“N 条标注未绘制”。结构、边或 IR 元素不得被丢弃后报 partial。
   5. 使用 03 稳定错误码/路径给出清晰原因；不降级裸坐标、不猜补关系、不自动调用模型纠错。保留请求与回复，允许用户手动重试。
 - **诊断隐私**：UI 展示安全原因与路径，不展示堆栈；日志不得包含 API Key、用户代码、原始载荷。不把旧图仍存在当成本次作图成功。
-- **落层**：编译结果写**覆盖层**（03 §4.6），与用户手绘分离；清空 AI 图不动手稿。
+- **落层**：编译结果写**覆盖层**（03 §4.6），与用户手绘分离；清空 AI 图不动手稿。覆盖层计入单题 100KB 存储预算，超限只提示不阻断保存。
 - **协议无关**：语义 JSON 契约不随厂商或文本/结构化传输形式变化；Provider Schema 子集适配不能放宽本地契约，图编译器不依赖模型厂商。
 - **状态**：本能力为**规划中**（04 仍为 Draft）；实现顺序在 03 编译器（§4.6）与 07 耦合层之后。
 
@@ -306,6 +306,7 @@ interface ConversationMessage {
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-20 | 同步 03 契约本轮实现：多叉树 null 缺位、图自环口径、map null 占位提示、覆盖层计入 100KB；不改变本模块 Draft 状态与模式清单 |
 | 2026-10-19 | 用户确认主面板入口打开独立扩展 Provider 配置页；改为 SW 受控请求代理、Port 流、Key 隔离与按需主机授权，定义取消/异常终止/无自动重发/安全错误；具体运行阈值列待确认，整体仍 Draft |
 | 2026-10-19 | 对齐 Confirmed DSL v2、标注能力/纯文本/预算、树示例与简单关系限制；不因作图契约确认而自动确认模式 UI |
 | 2026-10-15 | 补标注生成与示例约定：按 03 §4.3 区分四种用途/标题/关系，显式身份与能力表、不输出布局字段；未确认标注建议不进入生产提示词 |

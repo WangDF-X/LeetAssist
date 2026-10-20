@@ -1,7 +1,7 @@
 import type { WBElement } from "../../model";
 import type { DslStructure } from "../schema";
 import { newAnchorMap, registerAnchor } from "../anchors";
-import { labelProps, mkRect, type BuildCtx, type BuildResult } from "./common";
+import { emptyMark, labelProps, mkRect, type BuildCtx, type BuildResult } from "./common";
 
 const C = 40;
 
@@ -14,6 +14,7 @@ export function buildMatrix(
   const anchors = newAnchorMap();
   const dataRows = s.rows.length;
   const dataCols = s.rows.reduce((m, r) => Math.max(m, r.length), 0);
+  if (dataRows === 0) return { elements: [emptyMark(ctx)], anchors };
   const hasRowHeader = Array.isArray(s.rowHeaders);
   const hasColHeader = Array.isArray(s.colHeaders);
   const totalRows = dataRows + (hasColHeader ? 1 : 0);

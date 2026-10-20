@@ -1,7 +1,8 @@
 import type { WBArrowhead, WBElement } from "../../model";
 import type { DslStructure } from "../schema";
-import { newAnchorMap, registerAnchor } from "../anchors";
+import { entityKey, newAnchorMap, registerAnchor } from "../anchors";
 import {
+  emptyMark,
   labelProps,
   mkConnector,
   mkRect,
@@ -31,6 +32,7 @@ export function buildLinkedList(
   const colStep = nw + LINK_GAP_X;
   const out: WBElement[] = [];
   const anchors = newAnchorMap();
+  if (k === 0) return { elements: [emptyMark(ctx)], anchors };
 
   const pos: [number, number][] = [];
   if (!circular) {
@@ -66,6 +68,8 @@ export function buildLinkedList(
     const geom = {
       box: { x: nx, y: ny, w: nw, h: LINK_H },
       center: [nx + nw / 2, ny + LINK_H / 2] as [number, number],
+      // cell.index 与 node.id 指向同一结点实体：冲突/去重必须按实体而不是锚点 key。
+      entityKey: entityKey(s.id ?? "", "linkedListNode", i),
     };
     registerAnchor(anchors, { struct: s.id ?? "", at: "cell", index: i }, geom);
     const nodeId = nodes[i]?.id;

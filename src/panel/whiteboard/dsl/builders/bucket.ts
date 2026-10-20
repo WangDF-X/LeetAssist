@@ -1,7 +1,7 @@
 import type { WBElement } from "../../model";
 import type { DslStructure } from "../schema";
 import { newAnchorMap, registerAnchor } from "../anchors";
-import { labelProps, mkRect, type BuildCtx, type BuildResult } from "./common";
+import { emptyMark, labelProps, mkRect, type BuildCtx, type BuildResult } from "./common";
 
 const BW = 44;
 const CH = 30;
@@ -14,6 +14,7 @@ export function buildBucket(
 ): BuildResult {
   const out: WBElement[] = [];
   const anchors = newAnchorMap();
+  if (s.buckets.length === 0) return { elements: [emptyMark(ctx)], anchors };
   s.buckets.forEach((cells, b) => {
     const bx = ctx.x + b * (BW + GX);
     cells.forEach((v, j) => {

@@ -50,6 +50,8 @@ import {
   isBindable,
   resolveConnectorPoints,
   bboxBoundaryPoint,
+  sceneStorageBytes,
+  WB_SCENE_SCHEMA_VERSION,
 } from "./model";
 import { HistoryStack } from "./HistoryStack";
 import {
@@ -68,7 +70,7 @@ import { TextEditor } from "./TextEditor";
 import { ShapeRail } from "./ShapeRail";
 import { ParamDialog } from "./ParamDialog";
 import type { WBPreset } from "./presets";
-import { compileDiagram } from "./dsl";
+import { compileDiagram, LIMITS } from "./dsl";
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 4;
@@ -416,22 +418,21 @@ function ElementNode({
   }
 }
 
-/** [DEV-only] 带标注的示例 DSL，用于可视化预览标注效果（正式版删除） */
+/** [DEV-only] 带标注的示例 DSL（v2），用于可视化预览标注效果（正式版删除） */
 const DEV_DEMO_DSL = {
-  dslVersion: 1,
+  dslVersion: 2,
   caption: "示例：数组双指针 + 树结点高亮",
   structures: [
     { id: "A", kind: "array", items: [1, 3, 5, 7], indexed: true },
     {
       id: "T",
       kind: "tree",
+      variant: "binary",
       root: {
         id: "r",
         value: 1,
-        children: [
-          { id: "l", value: 2, children: [] },
-          { id: "rr", value: 3, children: [] },
-        ],
+        left: { id: "l", value: 2, left: null, right: null },
+        right: { id: "rr", value: 3, left: null, right: null },
       },
     },
   ],
@@ -454,6 +455,10 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
 
   const [size, setSize] = useState<Size>({ w: 0, h: 0 });
   const [elements, setElements] = useState<WBElement[]>([]);
+  // 覆盖层：AI/程序化产物（07 接线后写入）；预算与保存必须和绘制层一起计算。
+  const [overlay] = useState<WBElement[]>([]);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  const storageWarnedRef = useRef(false);
   const [view, setView] = useState<WBViewState>({
     scale: 1,
     offsetX: 0,
@@ -512,6 +517,31 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   selectedRef.current = selectedIds;
   const presetDialogRef = useRef<WBPreset | null>(presetDialog);
   presetDialogRef.current = presetDialog;
+
+  // 100KB 是单题全部画板内容（elements + overlay）的软目标：编辑停止 1s 后估算，
+  // 超限只提示一次，不阻断保存（03 spec §4.5 / contract §6）。
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const bytes = sceneStorageBytes({
+        schemaVersion: WB_SCENE_SCHEMA_VERSION,
+        elements,
+        overlay,
+        view,
+      });
+      if (bytes > LIMITS.storageBytes) {
+        if (!storageWarnedRef.current) {
+          storageWarnedRef.current = true;
+          setStorageWarning(
+            `画板内容约 ${Math.ceil(bytes / 1024)}KB，超过单题 100KB 目标；建议清理无用笔迹（不阻断保存）`,
+          );
+        }
+      } else {
+        storageWarnedRef.current = false;
+        setStorageWarning((w) => (w ? null : w));
+      }
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [elements, overlay, view]);
 
   // ---------- 基础设施 ----------
 
@@ -808,24 +838,21 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   /** 图元库插入：构造空值 DSL 结构 → 编译器展开（§4.6，与 AI 同一路径） */
   const insertPreset = useCallback(
     (preset: WBPreset, params: Record<string, number | boolean>) => {
-      const { elements: built } = compileDiagram(
-        { dslVersion: 1, structures: [preset.toStructure(params)] },
+      const res = compileDiagram(
+        { dslVersion: 2, structures: [preset.toStructure(params)] },
         { color, width, genId },
       );
-      placeElements(built);
+      if (res.status === "error") return; // 失败不改变场景/撤销栈
+      placeElements(res.elements);
     },
     [color, width, placeElements],
   );
 
   /** [DEV-only] 插入一段带标注的示例 DSL，用于可视化预览（正式版删除） */
   const insertDemoDiagram = useCallback(() => {
-    const { elements: built, warnings } = compileDiagram(DEV_DEMO_DSL, {
-      color,
-      width,
-      genId,
-    });
-    if (warnings.length) console.warn("[DEV demo] warnings:", warnings);
-    placeElements(built);
+    const res = compileDiagram(DEV_DEMO_DSL, { color, width, genId });
+    if (res.status === "error") return;
+    placeElements(res.elements);
   }, [color, width, placeElements]);
 
   const handlePickPreset = useCallback(
@@ -2023,6 +2050,14 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
             }
             return null;
           })()}
+        {storageWarning && (
+          <div className="la-wb-storage-warn" role="status">
+            <span>{storageWarning}</span>
+            <button className="la-wb-tool" onClick={() => setStorageWarning(null)}>
+              知道了
+            </button>
+          </div>
+        )}
         {confirmClear && (
           <div className="la-wb-confirm">
             <span>清空当前画布？此操作可用撤销恢复。</span>

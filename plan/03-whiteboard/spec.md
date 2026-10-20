@@ -2,13 +2,13 @@
 
 - 状态：In Progress（2026-09-21 开出 `feature/whiteboard-konva` 分支；2026-10-12 起在 `feature/metashape-lib` 做图元库）
 - 关联阶段：Phase 2
-- 最后更新：2026-10-19
+- 最后更新：2026-10-20
 - 涉及代码目录：`src/panel/whiteboard/`
 
 ## 1. 目标（In Scope）
 
 - 提供每道题独立的轻量画板：自由绘图（画笔）、箭头、矩形、圆形、文本、拖拽、缩放、撤销/重做、清空。
-- 自动保存到 `02-storage` 定义的 `ProblemSession.whiteboard`：**编辑停止 1 秒后自动保存**（防抖 1s）；**单题存储目标 ≤ 100KB**（lz-string 压缩后）。
+- 自动保存到 `02-storage` 定义的 `ProblemSession.whiteboard`：**编辑停止 1 秒后自动保存**（防抖 1s）；**单题存储目标 ≤ 100KB**（lz-string 压缩后，包含手绘 `elements` 与覆盖层 `overlay`；超限提示不阻断保存）。
 - 切换题目 / 刷新页面后能恢复对应题目的画板内容。
 - 快捷交互（用户已确认，2026-09-15）：
   - 鼠标右键 = 快速进入文字输入（拦截默认右键菜单）；
@@ -268,7 +268,7 @@ const WB_PRESET_GROUPS = {
 
 ### 4.5 紧凑化与 100KB 目标
 
-坐标取整（保留 1 位小数）、path 抽稀（simplify-js，tolerance ≈ 1.0）、语义 id 短字符串。保存时估算压缩后大小，超过 100KB 弹一次轻量提示（toast）告知"本题画板数据偏大，建议清理无用笔迹"，不阻断保存、不自动删用户数据。
+坐标取整（保留 1 位小数）、path 抽稀（simplify-js，tolerance ≈ 1.0）、语义 id 短字符串。保存时对**单题全部画板内容（`elements` + `overlay` + `view`）**估算 lz-string 压缩后大小，超过 100KB 弹一次轻量提示（toast）告知"本题画板数据偏大，建议清理无用笔迹"，不阻断保存、不自动删用户数据。编译器只负责 IR 预算（4096 元素），存储预算在画板层统一检查，两者不互相替代。
 
 ### 4.6 语义 DSL 与编译器（作图的唯一入口）
 
@@ -325,7 +325,7 @@ type DslStructure =
                initial?: string; accepting?: string[] };
 
 interface DslBinaryNode { id?: string; value: DslValue; left?: DslBinaryNode | null; right?: DslBinaryNode | null }
-interface DslNaryNode { id?: string; value: DslValue; children?: DslNaryNode[] }
+interface DslNaryNode { id?: string; value: DslValue; children?: (DslNaryNode | null)[] } // null=缺位
 ```
 
 **标注（过程态）——锚到语义位置，不锚坐标**（解耦命门）：
@@ -369,14 +369,21 @@ type DslAnnotation =
 **模块划分**（`src/panel/whiteboard/dsl/`）：
 
 ```
-schema.ts       # 公开类型/版本，与可执行 JSON Schema 保持同源
-validate.ts     # 分区结构校验、语义引用、范围/预算、默认值归一化
-anchors.ts      # 锚点类型 + 注册表
-engine.ts       # 排布 + 编译编排
+schema.ts       # 公开类型/版本
+llm-diagram.schema.json  # 可执行 JSON Schema（v2，权威形式规则）
+schema-meta.ts  # 结构/字段/颜色枚举（校验与 Schema 一致性检查共用）
+limits.ts       # 集中预算（diagram-contract §6）
+result.ts       # DiagramDiagnostic / CompileResult / 错误码
+diagnostics.ts  # 诊断稳定排序 + 上限截断
+validate.ts     # 分区结构校验、语义引用、范围/预算、默认值归一化、原始标注索引
+anchors.ts      # 锚点/实体的无歧义 key + 注册表（重复 key 内部失败）
+engine.ts       # 逐结构 build+标注（预留空间）+ caption + 严格 IR 后置
 builders/*.ts   # 12 结构：array/matrix/map/linkedList/tree/heap/graph/stack/queue/bucket/barChart/stateMachine
-annotations.ts  # pointer/highlight/window/note 解析
-index.ts        # compileDiagram(unknown) -> CompileResult（补充规范 §5.2）
+annotations.ts  # pointer/highlight/window/note 解析（车道/去重/冲突）
+index.ts        # compileDiagram(unknown, CompileOptions?) -> CompileResult（补充规范 §5.2）
 ```
+
+> 自动化：`npm run check:dsl`（Schema ↔ 元数据一致性，build 前置）、`npm run test:dsl`（契约用例）。
 
 **落层**：编译器纯计算、不修改场景。AI 成功结果原子替换 `scene.overlay`，图元库成功结果插入 `scene.elements`；失败不提交。覆盖层独立 Konva Layer（`listening=false`），共用 view 变换；显式清空与失败是不同操作。
 
@@ -423,7 +430,7 @@ index.ts        # compileDiagram(unknown) -> CompileResult（补充规范 §5.2�
     | 关系 | 状态机 | 状态数 4（2–6） | — |
 
   - **生成尺寸/间距**（世界坐标，§4.4 几何 seam）：通用方格 44；链表结点 = 值数×40 宽 × 30 高（每值一格）；树/图结点圆 ⌀44（状态机 ⌀48）；字号 16；树/堆层距 72、同层距 24。
-  - **链表细节**：结点可含多个值格（参数"每结点值数"，默认 1）；**连线按"就近格"绑定**——选中心最靠近目标结点的那一格，距离相同时取"环外侧"格（使环形里方向反转的边也朝向对方，箭头不斜穿）；**环形时结点沿矩形绕行排布**（上排 L→R、下排 R→L）；**双链用同一条连线的双向箭头（`arrowhead:"both"`）**，不再另加反向连线。
+  - **链表细节**：结点可含多个值格（参数"每结点值数"，默认 1）；**连线按"就近格"绑定**——选中心最靠近目标结点的那一格，距离相同时取"环外侧"格（使环形里方向反转的边也朝向对方，箭头不斜穿）；**环形时结点沿矩形绕行排布**（上排 L→R、下排 R→L）；**双链用同一条连线的双向箭头（`arrowhead:"both"`）**，不再另加反向连线；`结点数=1` 时环形自动关闭（v2 单节点环非法）。
   - **插入流程**：点图标 →（有参数）**画板居中参数窗** → **构造一个空值 DSL 结构**（§4.6）→ `compileDiagram` → 定位视口中心 → 自动全选 → 切选择态 → 一步撤销。
   - **实现**：模板参数只用于"填 DSL 结构"（`WBPreset.build` → `toStructure`）；几何尺寸/间距全部由 `dsl/builders/*` 决定（§4.6）。不引入新元素类型（§4.4 IR 契约）；"整体操作"（移动/缩放/删除）由 §5.4 的**通用多选**承担，不引入 `groupId`。
 - 画布右下角：缩放比例显示（如 `100%`）+ 点击复位视图按钮。
@@ -501,7 +508,7 @@ index.ts        # compileDiagram(unknown) -> CompileResult（补充规范 §5.2�
 - [ ] 滚轮缩放、Space+拖动平移工作正常。
 - [ ] **快捷键门控生效**：指针不在画布区域（如在 Monaco 中打字）时，Delete/Ctrl+Z/Space 等不影响画板。
 - [ ] 编辑停止 1 秒后自动保存；切题/刷新后内容正确恢复（依赖 01 的 SPA 切题检测）。
-- [ ] 单题画板压缩后存储 ≤ 100KB；超限时有一次性提示且不阻断保存。
+- [ ] 单题全部画板内容（`elements + overlay`）压缩后存储 ≤ 100KB；超限时有一次性提示且不阻断保存。
 - [ ] 覆盖层可被程序整体清空并批量重绘（同构 WBElement[]），不影响绘制层。
 - [ ] **主题适配**：深/浅主题切换后，画布底色、网格、已有图形（语义色）均正确跟随，无"黑纸黑线"。
 - [ ] 网格三样式（点阵/线格/无）可在白板设置 popover 切换并持久化。
@@ -530,6 +537,7 @@ index.ts        # compileDiagram(unknown) -> CompileResult（补充规范 §5.2�
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-20 | 对齐契约实现：多叉树 children 允许 null；builder 补 name/window.label/bar labels/initial/accepting；标注原索引与实体级冲突；默认 ID 冲突拒绝；严格 IR/sanitizer 对齐；单题 100KB 包含 elements+overlay 并在画板层提示；测试 69 项 |
 | 2026-10-19 | 画板中断手势收尾：blur/hidden/pointercancel 复位 Space，结束实时移动/缩放/视口，取消未提交预览；画布外松手清理草稿与端点预览，正常提交路径保留 |
 | 2026-10-19 | 快捷键门控修复：通过 composedPath 识别 Shadow DOM 内编辑控件，输入法组合及已处理事件让行；保留 Space keyup 复位，增加 Chrome/Edge 手工验证路径 |
 | 2026-10-19 | 用户接受推荐方案，专项 Confirmed；主 spec 同步 DSL v2、binary left/right、必填 variant、空树与无 gap 的锚点联合、确认记录及验收 |

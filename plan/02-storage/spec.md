@@ -7,7 +7,7 @@
 
 ## 1. 目标（In Scope）
 
-- 用 `chrome.storage.local` 保存轻量配置：AI Provider 列表（name/baseURL/apiKey/model）、UI 设置。
+- 用 `chrome.storage.local` 保存轻量配置：AI Provider 列表（name/protocol/baseURL/apiKey/model）、UI 设置。
 - 用 IndexedDB（通过 **Dexie** 封装）保存业务数据：每道题一个 `ProblemSession`（画板、计时、trace 等）。
 - **AI 对话完整保留**：一个题目可建多个对话（Conversation），每个对话完整保留消息记录（见 04-ai-assistant 3.3）；体积靠上下文快照去重控制；`@code` 代码附件按快照存储、消息引用 id。
 - 提供数据导出为单个 JSON 文件、导入恢复、清空本地数据三个功能。
@@ -165,10 +165,11 @@ two-sum        本地更新于 09-10   备份更新于 09-12   [覆盖本地] [�
 lru-cache      本地更新于 09-08   备份更新于 09-08   [覆盖本地] [跳过]
 ```
 
-Provider 设置表单：
+Provider 设置表单（位于独立扩展配置页，非页内 Shadow DOM）：
 
 ```
 Name:     [___________]
+Protocol: [OpenAI-compatible ▾]   // 或 Anthropic（决定端点/认证头拼接）
 Base URL: [___________]
 Model:    [___________]
 API Key:  [***************]
