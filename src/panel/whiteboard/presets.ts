@@ -4,7 +4,7 @@
 // - 12 个模板 × 4 组：线性 / 二维 / 层级 / 关系。
 // ⚠️ 维护约束（spec §4.4 G / §4.6）：WB_PRESETS 与 §5.1 模板表、§4.6 DSL 契约、dsl/builders 同源，
 //    增删模板/改参数范围与默认值/改结构字段，必须同步更新 spec 与 builders。
-import type { DslStructure, DslTreeNode } from "./dsl/schema";
+import type { DslBinaryNode, DslNaryNode, DslStructure } from "./dsl/schema";
 
 // ---------- 类型 ----------
 
@@ -72,9 +72,19 @@ function fill(n: number): null[] {
   return Array.from({ length: n }, () => null);
 }
 
-/** 满 branch 叉、levels 层的树（值留空） */
-function fullTree(branch: number, levels: number): DslTreeNode {
-  const build = (depth: number): DslTreeNode => ({
+/** 满二叉（left/right）空值树 */
+function fullBinary(levels: number): DslBinaryNode {
+  const build = (depth: number): DslBinaryNode => ({
+    value: null,
+    left: depth >= levels - 1 ? null : build(depth + 1),
+    right: depth >= levels - 1 ? null : build(depth + 1),
+  });
+  return build(0);
+}
+
+/** 满 branch 叉（children）空值树 */
+function fullNary(branch: number, levels: number): DslNaryNode {
+  const build = (depth: number): DslNaryNode => ({
     value: null,
     children:
       depth >= levels - 1
@@ -135,7 +145,8 @@ export const WB_PRESETS: WBPreset[] = [
         kind: "linkedList",
         nodes: Array.from({ length: count }, () => ({ values: fill(fields) })),
         doubly: bool(p, "doubly", false),
-        circular: bool(p, "circular", false),
+        // 单节点环形在 v2 中非法：模板自动关闭，避免生成不可编译的 DSL
+        circular: count > 1 ? bool(p, "circular", false) : false,
       };
     },
   },
@@ -226,13 +237,13 @@ export const WB_PRESETS: WBPreset[] = [
       { kind: "number", key: "levels", label: "层数", min: 1, max: 4, default: 3 },
       { kind: "number", key: "branch", label: "分支数", min: 2, max: 4, default: 2 },
     ],
-    toStructure: (p) => ({
-      kind: "tree",
-      root: fullTree(
-        clamp(num(p, "branch", 2), 2, 4),
-        clamp(num(p, "levels", 3), 1, 4),
-      ),
-    }),
+    toStructure: (p) => {
+      const levels = clamp(num(p, "levels", 3), 1, 4);
+      const branch = clamp(num(p, "branch", 2), 2, 4);
+      return branch === 2
+        ? { kind: "tree", variant: "binary", root: fullBinary(levels) }
+        : { kind: "tree", variant: "nary", root: fullNary(branch, levels) };
+    },
   },
   {
     id: "heap",

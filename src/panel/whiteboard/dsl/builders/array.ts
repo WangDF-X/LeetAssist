@@ -2,7 +2,7 @@ import { estimateTextSize } from "../../model";
 import type { WBElement } from "../../model";
 import type { DslStructure } from "../schema";
 import { newAnchorMap, registerAnchor } from "../anchors";
-import { FONT, labelProps, mkRect, mkText, type BuildCtx, type BuildResult } from "./common";
+import { FONT, emptyMark, labelProps, mkRect, mkText, type BuildCtx, type BuildResult } from "./common";
 
 const CELL = 44;
 
@@ -14,6 +14,7 @@ export function buildArray(
   const out: WBElement[] = [];
   const anchors = newAnchorMap();
   const n = s.items.length;
+  if (n === 0) return { elements: [emptyMark(ctx)], anchors };
   for (let i = 0; i < n; i++) {
     const x = ctx.x + i * CELL;
     out.push(mkRect(ctx, x, ctx.y, CELL, CELL, labelProps(s.items[i])));

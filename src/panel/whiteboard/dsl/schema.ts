@@ -1,23 +1,31 @@
-// 语义 DSL（plan/03-whiteboard §4.6）：作图的唯一入口契约。
-// - 只描述"画什么"（结构/值/标注），不含任何坐标/尺寸/颜色字面量。
-// - 由编译器（engine + builders）翻译为 WBElement[]（IR）。
-// - 图元库（左栏模板）与 AI 都产出本 DSL。
+// 语义 DSL v2（plan/03-whiteboard §4.6 + diagram-contract.md）。
+// - 只描述"画什么"（结构/值/标注），不含坐标/尺寸/颜色字面量。
+// - 由编译器（validate + builders + engine）翻译为 WBElement[]（IR）。
+// - 图元库与 AI 都产出本 DSL。
 import type { WBColorId } from "../../theme";
 
-export const DSL_VERSION = 1;
+export const DSL_VERSION = 2;
 
 export type DslValue = string | number | null;
 export type DslColor = WBColorId;
 
 interface DslBase {
-  id?: string; // 供标注引用；缺省由编译器分配
-  name?: string; // 图上显示的结构名/变量名
+  id?: string; // 供标注引用；缺省由编译器分配 s0/s1…
+  name?: string;
 }
 
-export interface DslTreeNode {
+export interface DslBinaryNode {
   id?: string;
-  value?: DslValue;
-  children?: DslTreeNode[];
+  value: DslValue; // v2：必填（可为 null）
+  left?: DslBinaryNode | null;
+  right?: DslBinaryNode | null;
+}
+
+export interface DslNaryNode {
+  id?: string;
+  value: DslValue;
+  /** v2：允许 null 表示缺位；null 不生成节点/边，也不是 value=null 的真实节点。 */
+  children?: (DslNaryNode | null)[];
 }
 
 export type DslStructure =
@@ -43,7 +51,8 @@ export type DslStructure =
   | (DslBase & { kind: "queue"; items: DslValue[]; deque?: boolean })
   | (DslBase & { kind: "bucket"; buckets: DslValue[][] })
   | (DslBase & { kind: "barChart"; values: number[]; labels?: DslValue[] })
-  | (DslBase & { kind: "tree"; variant?: "binary" | "nary"; root: DslTreeNode })
+  | (DslBase & { kind: "tree"; variant: "binary"; root: DslBinaryNode | null })
+  | (DslBase & { kind: "tree"; variant: "nary"; root: DslNaryNode | null })
   | (DslBase & { kind: "heap"; values: DslValue[]; showArray?: boolean })
   | (DslBase & {
       kind: "graph";
@@ -60,13 +69,13 @@ export type DslStructure =
     });
 
 export type DslStructureKind = DslStructure["kind"];
+export type DslTreeStructure = Extract<DslStructure, { kind: "tree" }>;
 
-/** 标注锚点：语义位置（第几格 / 哪个结点），不含坐标 */
+/** 标注锚点：语义位置（第几格 / 哪个结点），不含坐标；v2 不开放 gap */
 export type DslAnchor =
   | { struct: string; at: "cell"; index: number }
   | { struct: string; at: "cell2"; row: number; col: number }
-  | { struct: string; at: "node"; id: string }
-  | { struct: string; at: "gap"; index: number };
+  | { struct: string; at: "node"; id: string };
 
 export type DslAnnotation =
   | { kind: "pointer"; anchor: DslAnchor; label: string; color?: DslColor }
@@ -81,7 +90,7 @@ export type DslAnnotation =
   | { kind: "note"; anchor?: DslAnchor; text: string; color?: DslColor };
 
 export interface LlmDiagram {
-  dslVersion?: number;
+  dslVersion: 2;
   caption?: string;
   structures: DslStructure[];
   annotations?: DslAnnotation[];

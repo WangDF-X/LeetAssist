@@ -1,5 +1,6 @@
+import { estimateTextSize } from "../../model";
 import type { DslStructure } from "../schema";
-import type { BuildCtx, BuildResult } from "./common";
+import { FONT, mkText, type BuildCtx, type BuildResult } from "./common";
 import { buildArray } from "./array";
 import { buildBarChart } from "./barChart";
 import { buildStack } from "./stack";
@@ -16,8 +17,10 @@ import { buildStateMachine } from "./stateMachine";
 export type { BuildCtx, BuildResult } from "./common";
 export { FONT } from "./common";
 
-/** 按 kind 分派到对应 builder */
-export function buildStructure(s: DslStructure, ctx: BuildCtx): BuildResult {
+const TITLE_GAP = 8;
+
+/** 按 kind 分派到对应 builder（不含结构标题）。 */
+function dispatch(s: DslStructure, ctx: BuildCtx): BuildResult {
   switch (s.kind) {
     case "array":
       return buildArray(s, ctx);
@@ -44,4 +47,17 @@ export function buildStructure(s: DslStructure, ctx: BuildCtx): BuildResult {
     case "stateMachine":
       return buildStateMachine(s, ctx);
   }
+}
+
+/**
+ * 结构标题（contract §4.3.1 structure.name）：
+ * 标题占一行，主体整体下移；锚点随 ctx.y 平移，不需要额外修正。
+ */
+export function buildStructure(s: DslStructure, ctx: BuildCtx): BuildResult {
+  const name = typeof s.name === "string" && s.name.trim() !== "" ? s.name : undefined;
+  if (!name) return dispatch(s, ctx);
+  const size = estimateTextSize(name, FONT);
+  const title = mkText(ctx, ctx.x, ctx.y, name);
+  const body = dispatch(s, { ...ctx, y: ctx.y + size.h + TITLE_GAP });
+  return { elements: [title, ...body.elements], anchors: body.anchors };
 }

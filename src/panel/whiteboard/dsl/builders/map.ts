@@ -1,7 +1,7 @@
 import type { WBElement } from "../../model";
 import type { DslStructure } from "../schema";
 import { newAnchorMap, registerAnchor } from "../anchors";
-import { labelProps, mkRect, type BuildCtx, type BuildResult } from "./common";
+import { emptyMark, labelProps, mkRect, type BuildCtx, type BuildResult } from "./common";
 
 const KW = 72;
 const VW = 120;
@@ -15,6 +15,7 @@ export function buildMap(
   const out: WBElement[] = [];
   const anchors = newAnchorMap();
   const header = !!s.header;
+  if (s.entries.length === 0) return { elements: [emptyMark(ctx)], anchors };
   const total = s.entries.length + (header ? 1 : 0);
   for (let r = 0; r < total; r++) {
     const y = ctx.y + r * RH;

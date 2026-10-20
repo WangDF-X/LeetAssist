@@ -1,7 +1,7 @@
 # 程序化作图契约与健壮性规范
 
 - 状态：Confirmed（2026-10-19 用户接受推荐方案；§10 为确认决策索引）
-- 最后更新：2026-10-19
+- 最后更新：2026-10-20
 - 归属：03-whiteboard spec §4.6；联动 04-ai-assistant §3.9、07-ai-band
 - 涉及代码目录：`src/panel/whiteboard/dsl/`；调用方图元库、04 输出适配、07 耦合层
 - 文档性质：目标契约与验收要求，**不代表当前代码已实现**。本文细化并取代旧文档中“宽松归一化后直接编译”“结构生成失败跳过”“部分 IR 元素丢弃后成功”的程序化作图策略。
@@ -56,6 +56,7 @@
 - Schema 方言、生成方式、校验库是工程选型，具体依赖选型不能改变协议。
 - Provider 支持结构化输出时可以提前施加同源约束；**所有输入仍必须本地校验**。Provider 的 Schema 子集适配不能放宽本地协议。
 - 原有 TypeScript 联合类型仅说明预期形态，不是可执行校验器；禁止将 unknown 强转为 `DslStructure` 后直接送 builder。
+- **已落地**：可执行 Schema 位于 `src/panel/whiteboard/dsl/llm-diagram.schema.json`；`npm run check:dsl` 校验 Schema 与本地校验元数据（`schema-meta.ts`）一致并作为 build 前置；`npm run test:dsl` 运行契约自动化用例。
 
 ### 3.2 输入规则
 
@@ -89,7 +90,7 @@
 - 显式 ID 为非空字符串；结构 ID 图内唯一，节点 ID 在所属结构内唯一。重复主体 ID 拒绝整图；同名标签允许，标签不是 ID。
 - 图边、状态转移、initial/accepting 必须引用所属结构的真实实体；不存在即关键结构错误，不跳过该边后成功。协议没有隐式跨结构边。
 - 标注先解析结构，再校验锚点种类、实体/索引与结构能力。不可通过标签猜节点，也不能将表头/补出的格子当真实数据锚点。
-- 锚点 key 必须无歧义编码字段元组，不能使用未经转义的分隔符拼接；重复 key 是内部错误，禁止 Map 覆盖。
+- 锚点 key 必须无歧义编码字段元组，不能使用未经转义的分隔符拼接；实现使用 JSON 元组编码。重复 key 是内部错误，禁止 Map 覆盖（builder 登记时直接失败为 BUILD_FAILED）。同一实体的多个锚点（如 linkedList cell/node）通过独立 entity key 关联冲突与去重。
 - 布局只改变锚点几何，不能改变 ID、原索引、值顺序或左右/前后关系。
 
 ### 4.2 结构核对表
@@ -100,20 +101,20 @@
 |---|---|---|
 | array | items 原顺序；cell 对应真实数据；indexed 不改变数据 | 允许 items=[]；不开放 gap |
 | matrix | rows 各行等长；cell2 数据行列不含表头 | 表头若给严格等于对应行/列数；rows=[] 为 0×0；非空 rows 不允许零列；未计算格显式填 null |
-| map | entries 的 key/value 必填；cell2 为条目行及键/值两列 | 禁止重复键，按类型和值比较，数字 1 与字符串 "1" 不同；允许空表 |
+| map | entries 的 key/value 必填；cell2 为条目行及键/值两列 | 禁止重复键，按类型和值比较，数字 1 与字符串 "1" 不同；允许空表。**null 键视为"未填写占位"（图元库空模板），允许多个 null；仅非 null 键禁止重复** |
 | linkedList | 顺序及多值保留；显式 ID 唯一；cell.index 指整个节点 | 每节点 values 为 1–4 项；node.id 同样指整个节点；不开放内部值格；空链允许；非空 circular 至少两节点，单节点环拒绝 |
 | stack / queue | 不因布局反转 items 内容 | 栈 items[0] 底、末项顶；队列 items[0] 首、末项尾；允许空 |
 | bucket | 桶及桶内顺序保留；空占位不注册成数据 | cell2.col 是桶索引、row 是桶内索引；允许空桶及 buckets=[]；无 window |
 | barChart | values 有限且非负，不修改数值、不截标签 | 零保留位置/数值，以零高度标记显示；labels 若给严格同长；允许空 |
-| tree | variant 必填 binary/nary；root 可 null；节点 value 必填且可 null | binary 只用 left/right；nary 只用 children；禁止混用；children 不含 null；保留左右缺位语义 |
+| tree | variant 必填 binary/nary；root 可 null；节点 value 必填且可 null | binary 只用 left/right；nary 只用 children；禁止混用；**children 可含 null 表示缺位**（不生成节点/边，也不是 value=null 的真实节点）；保留左右缺位语义 |
 | heap | values 按完全二叉树索引解释；不排序/堆化/验证堆序 | 允许空；树 node.id 固定 h0/h1…；showArray=true 才提供 cell.index 数组锚点，不映射到树 |
-| graph | ID 唯一；端点存在；directed 缺省 false | 允许空；拒绝自环/平行/同对反向边；无向 (a,b)/(b,a) 是重复；label 与 weight 都给显示“label · weight” |
-| stateMachine | 状态唯一；转移/初态/终态引用存在 | 允许空，initial 缺省、accepting 缺省 []；accepting 不重复；拒绝自环/平行/同对反向转移 |
+| graph | ID 唯一；端点存在；directed 缺省 false | 允许空；**拒绝同方向重复边**；无向图 (a,b)/(b,a) 视为同一条边；**自环允许（有向/无向），有向图另允许反向边**（静态平行偏移/环线渲染）；label 与 weight 都给显示“label · weight”，组合后不得超过 200 码点 |
+| stateMachine | 状态唯一；转移/初态/终态引用存在 | 允许空，initial 缺省、accepting 缺省 []；accepting 不重复；**拒绝同方向重复转移；允许自环与反向转移**（静态环线/偏移渲染） |
 
 - 空结构显示可选 name 及编译器生成的 ∅，不伪造数据项/节点/锚点。顶层 structures 至少 1 项，不能以空图请求代替显式清空。
 - 空树 root=null 与值为 null 的真实节点不同。仅右孩子的树必须保留右侧语义，不居中成唯一无方向孩子。
 - window 仅开放 array.cell 与 matrix.cell2，见 §4.3.3；gap 不进入 v2 生产 Schema。
-- 图/状态机自环、多边、反向双边留待后续连线路径扩展，不静默合并/删边。链表 circular 属于已有独立 builder 能力，不因图的限制全部禁用。
+- 图/状态机允许自环（图的有向/无向均允许）与有向图的反向边，采用**静态**环线/平行偏移近似（不新增曲线路径、不随结点移动重算）；同方向重复边/转移仍拒绝。链表 circular 属于已有独立 builder 能力，不因图的限制全部禁用。
 - 图形契约只保证形式和内部关系一致，不能证明模型的算法推理或题意理解正确。值与步骤须来自题面、代码快照或明确示例。
 
 ### 4.3 标注专项约定
@@ -174,7 +175,7 @@
 
 - 允许 i/j 等多个 pointer 共指同一实体、多 note、嵌套/交叉合法窗口；输入顺序是稳定布局优先序，不等于覆盖序。
 - 多指针不能合并 label、去重或改指向；编译器按车道/水平错位布局，所有箭头仍落在原锚点。
-- 完全相同的标注允许无损视觉去重，保留全部来源索引，不计 droppedAnnotations；比较已解析的实体/范围、原文及有效颜色。不同文字、指针名或颜色不能当重复。
+- 完全相同的标注允许无损视觉去重，内部保留全部来源索引（不进入 IR），不计 droppedAnnotations；比较已解析的实体/范围、原文及有效颜色。不同文字、指针名或颜色不能当重复。
 - 同一实体不同有效颜色的 highlight 为冲突（包括链表 cell/node 指同一实体）：保留先出现者，后续冲突条跳过，诊断 ANNOTATION_CONFLICT 并 partial；不使用隐式末项覆盖。
 - window 与 highlight/pointer 可以同时存在，window 的色不覆写主体或其他标注颜色。多个合法框重叠不是输入错误，不能只因视觉交叠就跳过有效标注。
 - 冲突检测在语义实体解析后、几何生成前执行；无效的早期标注不占用实体颜色。不同结构同名 ID 不会被误认为同一实体。
@@ -238,12 +239,14 @@ interface DiagramDiagnostic {
 
 type CompileResult =
   | { status: "ok" | "partial"; elements: WBElement[];
-      droppedAnnotations: number; diagnostics: DiagramDiagnostic[] }
+      droppedAnnotations: number; dedupedAnnotationIndices: number[];
+      diagnostics: DiagramDiagnostic[] }
   | { status: "error"; elements: []; droppedAnnotations: 0;
       diagnostics: DiagramDiagnostic[] };
 ```
 
 - error 的 droppedAnnotations=0 表示没有实际提交，不代表输入标注有效；问题细节由 diagnostics 表达。
+- `dedupedAnnotationIndices` 为无损去重保留的原始标注索引，不进入 IR；不影响 partial 计数。
 - 状态不变量：ok 的 droppedAnnotations=0 且无错误诊断；partial 的 droppedAnnotations>0 且无错误诊断；error 至少一条 error 诊断。partial 计数按原始标注索引去重，不按诊断条数计算。
 - 非丢弃型布局 warning 不构成 partial；ok 可以附布局提示。ANNOTATION_CONFLICT / LAYOUT_OVERLAP 的触发规则见 §4.3。
 - 最小错误码：INVALID_ENVELOPE、UNSUPPORTED_VERSION、INVALID_FIELD、UNKNOWN_FIELD、LIMIT_EXCEEDED、DUPLICATE_ID、UNKNOWN_REFERENCE、INVALID_ANCHOR、INDEX_OUT_OF_RANGE、UNSUPPORTED_SEMANTICS、BUILD_FAILED、INVALID_IR。
@@ -267,6 +270,7 @@ type CompileResult =
 | 树深度 | 16，根为第 1 层；内部 heap 也检查 |
 | JSON 对象/数组嵌套深度 | 64，根为第 1 层；与树语义深度分别检查 |
 | 最终 IR | 4096 元素，计标题、空态、下标及标注；文本不拆成绕过预算的无界元素 |
+| 单题存储 | 100 KiB（102400 字节）：`ProblemSession.whiteboard` 场景（`elements + overlay + view`）经 lz-string 压缩后的软目标；超限提示但不阻断保存，不属于编译 error |
 | 诊断 | 50 条，含省略摘要；不影响按全部原标注统计丢弃数 |
 | 值/节点/边 label、name、caption、window.label、ID | 每字段 200 Unicode 码点；ID 非空且非全空白 |
 | pointer.label | 32 Unicode 码点、单行且非全空白 |
@@ -274,6 +278,7 @@ type CompileResult =
 | 几何 | 沿用 IR 坐标 ±100000、尺寸 ≤100000、字号 8–72；整体宽高 ≤100000 |
 
 - 单结构使用相同 512 数据单位/512 显式边上限，整图累计仍为 512，不能以多个结构倍增；所有局部文字/深度上限独立生效。linkedList 每节点 1–4 值格的结构限制仍保留。
+- IR 4096 元素是编译安全上限；100 KiB 是**单题全部画板内容**（手绘 elements + 覆盖层 overlay + view 的 scene 序列化）压缩后的保存软目标，两者分别检查。覆盖层计入体积估算，超限只提示、不拒绝编译或保存。
 - Unicode 码点计数须跨浏览器一致；现有 sanitizer 若按 UTF-16 单元处理，须同步调整或严格检测，不能截断已通过校验的非 BMP 字符。
 - 初始预算须通过图元库最大参数组合及边界回归；它们是接受上限，不是性能保证。既有模板最大树为 85 节点、矩阵 144 格，低于数据预算；产物仍须实际检查。
 - 载荷大小在解析前检查；解析后遍历采用有界/迭代策略，在展开前计数与检查深度，不能深度递归到栈溢出后才拦截。
@@ -290,6 +295,7 @@ type CompileResult =
 - 文字度量、图形边界、连线绑定、锚点几何共用 spec §4.4 的纯函数接口；尺寸适配后锚点登记最终几何。
 - 后置检查：几何全部有限且在 IR 范围内；尺寸有效；ID 全局唯一；绑定目标存在且合法；label 未丢失/截断；必需锚点完整；元素数和整体包围盒受预算约束。
 - 历史场景加载的 sanitize 容错不适用于新编译批次。若 sanitizer 会 clamp/截断/补 ID/解绑/丢元素，编译返回 error，不提交被修过的部分图。居中平移后的最终批次也须符合几何边界。
+- 编译批次写入存储后再读取必须保持语义一致：IR 后置检查的 ID/label/text 上限与持久化 sanitizer 对齐，禁止出现“编译成功、刷新后 label 被截断或元素被改写”。
 - 先保证完整、受控、不崩溃，不承诺任意复杂图无交叉。长文字适配、多指针车道、标注空间预留在布局层迭代；需新增曲线路径/端口/DSL 字段则另行确认。
 
 ## 8. 原子提交与生命周期（联动 07）
@@ -324,7 +330,9 @@ type CompileResult =
 | 视觉提示 | 有效标注拥挤、标题/下标/局部标注/多结构相邻 | warning 与丢弃分开；无暗改目标或值；最终边界合法 |
 | 集成 | 旧图上 error/partial/ok，晚到请求、切题、清空、取消 | 保留旧图或原子替换；无串图/复活旧图 |
 
-必须补仅右孩子二叉树、null 真实节点/空树、空态、参差矩阵拒绝、重复键、自环/反向/多边拒绝、堆双表示、零柱/负柱拒绝、v1 拒绝及既有 IR 加载用例。Chrome/Edge 共用契约，不能按浏览器改变索引或范围语义。
+> 已落地核心子集：`scripts/dsl-tests.ts`（`npm run test:dsl`，69 项），覆盖 12 结构正例、envelope/版本、语义拒绝、标注 partial/冲突/去重/车道、原始 annotationIndex、linkedList cell/node 同实体冲突、锚点 key 无歧义与重复登记、默认 ID 冲突拒绝、多叉树 null 子结点、诊断上限、LAYOUT_OVERLAP 基础警告、严格 IR 重复 id、100KB 场景预算、树/栈/heap、空态与预算。JSON Schema 与校验元数据（字段/required/颜色/数值上限）一致性由 `npm run check:dsl` 保证。
+
+仍需补：null 真实节点/空树、各结构空态、负柱、既有 IR 加载、阈值等于/累计超限/深树/环引用、二维窗口与反向/混合范围、复杂布局重叠回归，以及 07 的跨题/晚到请求集成用例。Chrome/Edge 共用契约，不能按浏览器改变索引或范围语义。
 
 ### 9.1.1 双浏览器冒烟验收
 
@@ -349,9 +357,12 @@ type CompileResult =
 - [x] 同位多指针/note 允许；完全相同标注可无损去重；多色高亮保留先项、后项冲突 partial；文字、层序及布局 warning 按 §4.3。
 - [x] 被引用的链表/树节点显式 ID；链表 cell 指整节点；map 禁重复键。
 - [x] 堆不验堆序；树 h0/h1… 与可选数组 cell 分开寻址。
-- [x] 图/状态机自环、平行/同对反向边拒绝；不扩展连线路径；label/weight 同时显示。
-- [x] 柱状图零允许、负值拒绝、labels 同长，空态统一。
+- [x] 图/状态机：仅拒绝同方向重复；允许自环与有向反向边（静态环线/偏移渲染）；不扩展曲线路径；label/weight 同时显示。
+- [x] 柱状图零允许、负值拒绝、labels 同长，空态统一；labels 由 builder 渲染。
 - [x] 初始预算集中在 §6；边界/累计与图元库最大组合均纳入测试。
+- [x] 2026-10-20：多叉树 `children` 允许 null 表示缺位（不生成节点/边，区别于 value=null 的真实节点）。
+- [x] 2026-10-20：structure.name、window.label、stateMachine.initial/accepting 必须由 builder 实际渲染；标注诊断使用原始 annotationIndex；冲突/去重按语义实体。
+- [x] 2026-10-20：单题 100KiB 存储目标包含 elements + overlay，超限只提示不阻断保存；IR 4096 仍为编译硬上限。
 
 ## 11. 参考与变更记录
 
@@ -359,6 +370,9 @@ type CompileResult =
 
 | 日期 | 内容 |
 |---|---|
+| 2026-10-20 | 实现对齐：补齐 name/window.label/bar labels/initial/accepting；标注原始索引与实体级冲突/去重；锚点 key JSON 编码与重复登记失败；默认 ID 冲突拒绝；多叉树 children 允许 null；严格 IR 检查与 sanitizer 对齐；诊断排序/上限；单题 100KiB 预算接线（elements+overlay）。测试 69 项，`check:dsl` 增加 required/颜色/数值上限同源检查 |
+| 2026-10-20 | 放宽图/状态机：允许自环与有向反向边（静态环线/平行偏移渲染），仅拒绝同方向重复；无向反向仍视为重复。JSON Schema 落盘（`llm-diagram.schema.json`）+ `check:dsl`/`test:dsl` 自动化 |
+| 2026-10-19 | 实现对齐说明：map 的 `null` 键按"未填写占位"允许多个（图元库空模板），仅非 null 键禁止重复；单节点环形链表仍按 v2 拒绝，图元库 `count=1` 时自动关闭环形 |
 | 2026-10-19 | 用户接受推荐，专项转 Confirmed：定稿结构/标注/空态/边限制与预算；用 DSL v2 隔离语义修订，保留旧 IR；同步 Chrome/Edge 契约一致性要求 |
 | 2026-10-15 | 补充 §4.3 标注专项约定：四种职责/字段、锚点能力表、范围语义建议、多标注与冲突、布局/层序/后置检查、示例；补专项测试及待确认项，明确用户非法引用与 builder 缺锚点的不同失败等级 |
 | 2026-10-15 | 用户确认主体严格/标注有限容错，细化三层校验职责、可执行契约、诊断、预算、后置检查、原子提交、测试矩阵；未讨论的协议边界列为待确认 |
