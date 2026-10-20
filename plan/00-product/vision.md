@@ -1,7 +1,7 @@
 # 产品定位与核心原则
 
 - 状态：Confirmed（方向已确定；具体某个功能的实现细节以对应模块 spec 为准）
-- 最后更新：2026-09-15
+- 最后更新：2026-10-19
 - 来源：《LeetCode 刷题辅助插件——技术栈与开发规划.md》整理
 
 ## 1. 一句话定位
@@ -53,7 +53,7 @@
 
 | 模块 | 第一版方案 | 后续 |
 |---|---|---|
-| 浏览器扩展 | Chrome Extension MV3 | Firefox/Edge |
+| 浏览器扩展 | Chrome / Microsoft Edge（当前稳定版）Manifest V3 | Firefox 待评估 |
 | 前端 | React + TypeScript | 不需要更换 |
 | 构建 | Vite + @crxjs/vite-plugin | 不需要更换 |
 | UI | Tailwind + shadcn/ui | 不需要更换 |
@@ -74,8 +74,8 @@
 ```
 ① Chrome Extension 骨架          → plan/01-extension-shell
 ② LeetCode 题目/代码获取          → plan/01-extension-shell
-③ Side Panel                     → plan/01-extension-shell
-④ tldraw 画板                    → plan/03-whiteboard
+③ 页内悬浮面板 + 工具栏          → plan/01-extension-shell
+④ Konva 画板                     → plan/03-whiteboard
 ⑤ IndexedDB 保存 + 导入导出       → plan/02-storage
 ⑥ BYOK AI                        → plan/04-ai-assistant
 ⑦ AI 智能计时                    → plan/05-timer
@@ -111,3 +111,4 @@
 | 2026-09-15 | 确认第一版正式版（V1）不含任何 trace 功能，路线图 ⑧～⑪ 全部延后到正式版之后；计时改为本地算法估算（不调用 AI） |
 | 2026-09-15 | 确认 V1 AI 协议范围扩展为 OpenAI-compatible + Anthropic 原生（方案 a），更新核心原则与技术栈表格 |
 | 2026-09-15 | 主 UI 由 Chrome Side Panel 改为页内悬浮面板 + 悬浮 logo 入口（用户新 UI 设计：左画板右 Agent 双栏 + 中间竖直工具栏）；AI 对话改为完整保留、一题多对话 |
+| 2026-10-19 | 同步既有决策：Chrome 与 Microsoft Edge 均为正式目标（Firefox 待评估）；路线图修正为页内悬浮面板 + Konva 画板（原 Side Panel / tldraw 字样过时） |

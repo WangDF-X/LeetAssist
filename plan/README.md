@@ -7,14 +7,19 @@
 | 目录 | 内容 |
 |---|---|
 | `00-product/vision.md` | 产品定位、核心原则（Local First / BYOK / Small & Useful）、明确不做的事、整体阶段路线图 |
-| `01-extension-shell/` | Chrome Extension 骨架：manifest、background、content script、Side Panel 外壳 |
+| `01-extension-shell/` | Chrome/Edge 扩展骨架：manifest、background、content script、页内悬浮面板与中间工具栏（非 Side Panel） |
 | `02-storage/` | 本地存储：`chrome.storage.local` + IndexedDB 数据结构、导入导出 |
 | `03-whiteboard/` | 画板功能（Konva 自建轻量画板） |
 | `04-ai-assistant/` | BYOK AI 助手 |
 | `05-timer/` | AI 智能计时 |
 | `06-trace/` | 代码执行 Trace（Python / AI Simulation / 未来 Go） |
+| `07-ai-band/` | AI 与功能模块的耦合层：AI 结构化输出（DSL）→ 白板编译器；可复用于后续 AI 相关跨模块功能 |
 
 每个模块目录下有一个 `spec.md`，模板见 `_template.md`。
+
+程序化作图专项契约见 [`03-whiteboard/diagram-contract.md`](03-whiteboard/diagram-contract.md)：03 §4.6 的规范性补充，集中定义 DSL v2、Schema/语义校验、标注、诊断、预算和原子提交；2026-10-19 用户接受推荐方案后为 Confirmed，2026-10-20 补充多叉树 null 缺位、builder 语义补齐、实体级冲突/原始索引、严格 IR 与单题 100KB（含 overlay）预算，§10 是确认记录。04/07 整体仍按各自 spec 状态推进。
+
+Provider 请求与配置约定：01 提供主面板入口打开独立扩展配置页；02 管理可信 local 存储与无 Key 摘要；04 定义 Service Worker 请求代理、动态主机授权和 Port 流式生命周期；07 只接正常完成的作图输出，不承担网络代理。具体规则见 02 §3.5–3.6、04 §3.1/3.8。
 
 ## Spec 状态机
 

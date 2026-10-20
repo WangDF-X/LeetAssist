@@ -50,12 +50,15 @@ import {
   isBindable,
   resolveConnectorPoints,
   bboxBoundaryPoint,
+  sceneStorageBytes,
+  WB_SCENE_SCHEMA_VERSION,
 } from "./model";
 import { HistoryStack } from "./HistoryStack";
 import {
   DEFAULT_BINDINGS,
   loadBindings,
   matchKey,
+  shouldIgnoreShortcut,
   type WBBindings,
 } from "./bindings";
 import {
@@ -64,6 +67,10 @@ import {
   type WBTool,
 } from "./Toolbar";
 import { TextEditor } from "./TextEditor";
+import { ShapeRail } from "./ShapeRail";
+import { ParamDialog } from "./ParamDialog";
+import type { WBPreset } from "./presets";
+import { compileDiagram, LIMITS } from "./dsl";
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 4;
@@ -411,6 +418,34 @@ function ElementNode({
   }
 }
 
+/** [DEV-only] 带标注的示例 DSL（v2），用于可视化预览标注效果（正式版删除） */
+const DEV_DEMO_DSL = {
+  dslVersion: 2,
+  caption: "示例：数组双指针 + 树结点高亮",
+  structures: [
+    { id: "A", kind: "array", items: [1, 3, 5, 7], indexed: true },
+    {
+      id: "T",
+      kind: "tree",
+      variant: "binary",
+      root: {
+        id: "r",
+        value: 1,
+        left: { id: "l", value: 2, left: null, right: null },
+        right: { id: "rr", value: 3, left: null, right: null },
+      },
+    },
+  ],
+  annotations: [
+    { kind: "window", from: { struct: "A", at: "cell", index: 0 }, to: { struct: "A", at: "cell", index: 3 }, color: "blue", label: "窗口" },
+    { kind: "pointer", anchor: { struct: "A", at: "cell", index: 0 }, label: "lo", color: "blue" },
+    { kind: "pointer", anchor: { struct: "A", at: "cell", index: 3 }, label: "hi", color: "red" },
+    { kind: "highlight", anchor: { struct: "A", at: "cell", index: 2 }, color: "orange" },
+    { kind: "note", anchor: { struct: "A", at: "cell", index: 2 }, text: "当前考察", color: "green" },
+    { kind: "highlight", anchor: { struct: "T", at: "node", id: "l" }, color: "green" },
+  ],
+};
+
 export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
@@ -420,6 +455,10 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
 
   const [size, setSize] = useState<Size>({ w: 0, h: 0 });
   const [elements, setElements] = useState<WBElement[]>([]);
+  // 覆盖层：AI/程序化产物（07 接线后写入）；预算与保存必须和绘制层一起计算。
+  const [overlay] = useState<WBElement[]>([]);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  const storageWarnedRef = useRef(false);
   const [view, setView] = useState<WBViewState>({
     scale: 1,
     offsetX: 0,
@@ -444,6 +483,7 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null); // 正在被拖动的元素（拖动中隐藏端点手柄）
   const [panning, setPanning] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [presetDialog, setPresetDialog] = useState<WBPreset | null>(null); // 图元库参数窗（§5.1）
   const [historyTick, setHistoryTick] = useState(0); // 驱动撤销/重做按钮可用态
 
   const historyRef = useRef(new HistoryStack());
@@ -468,12 +508,40 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
   const elementsRef = useRef(elements);
   elementsRef.current = elements;
   const spaceRef = useRef(false);
+  const activePointerRef = useRef<number | null>(null);
   const hoverRef = useRef(false);
   const justDraggedRef = useRef(false); // 刚完成拖动：用于忽略紧随的 click
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const selectedRef = useRef(selectedIds);
   selectedRef.current = selectedIds;
+  const presetDialogRef = useRef<WBPreset | null>(presetDialog);
+  presetDialogRef.current = presetDialog;
+
+  // 100KB 是单题全部画板内容（elements + overlay）的软目标：编辑停止 1s 后估算，
+  // 超限只提示一次，不阻断保存（03 spec §4.5 / contract §6）。
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const bytes = sceneStorageBytes({
+        schemaVersion: WB_SCENE_SCHEMA_VERSION,
+        elements,
+        overlay,
+        view,
+      });
+      if (bytes > LIMITS.storageBytes) {
+        if (!storageWarnedRef.current) {
+          storageWarnedRef.current = true;
+          setStorageWarning(
+            `画板内容约 ${Math.ceil(bytes / 1024)}KB，超过单题 100KB 目标；建议清理无用笔迹（不阻断保存）`,
+          );
+        }
+      } else {
+        storageWarnedRef.current = false;
+        setStorageWarning((w) => (w ? null : w));
+      }
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [elements, overlay, view]);
 
   // ---------- 基础设施 ----------
 
@@ -738,13 +806,70 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     setSelectedIds(clones.map((c) => c.id));
   }, [cloneElements, commitElements]);
 
+  // ---------- 图元库插入（§5.1）----------
+
+  /** 把一组已编译元素平移到视口中心 → 追加 → 自动全选 → 切选择态（一步撤销） */
+  const placeElements = useCallback(
+    (built: WBElement[]) => {
+      if (!built.length) return;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const el of built) {
+        const b = getElementBounds(el);
+        minX = Math.min(minX, b.x);
+        minY = Math.min(minY, b.y);
+        maxX = Math.max(maxX, b.x + b.w);
+        maxY = Math.max(maxY, b.y + b.h);
+      }
+      const centerX = (size.w / 2 - view.offsetX) / view.scale;
+      const centerY = (size.h / 2 - view.offsetY) / view.scale;
+      const dx = centerX - (minX + maxX) / 2;
+      const dy = centerY - (minY + maxY) / 2;
+      const placed = built.map((el) => translateElement(el, dx, dy));
+      commitElements([...elementsRef.current, ...placed]);
+      setSelectedIds(placed.map((el) => el.id));
+      setTool("select");
+    },
+    [size.w, size.h, view, commitElements],
+  );
+
+  /** 图元库插入：构造空值 DSL 结构 → 编译器展开（§4.6，与 AI 同一路径） */
+  const insertPreset = useCallback(
+    (preset: WBPreset, params: Record<string, number | boolean>) => {
+      const res = compileDiagram(
+        { dslVersion: 2, structures: [preset.toStructure(params)] },
+        { color, width, genId },
+      );
+      if (res.status === "error") return; // 失败不改变场景/撤销栈
+      placeElements(res.elements);
+    },
+    [color, width, placeElements],
+  );
+
+  /** [DEV-only] 插入一段带标注的示例 DSL，用于可视化预览（正式版删除） */
+  const insertDemoDiagram = useCallback(() => {
+    const res = compileDiagram(DEV_DEMO_DSL, { color, width, genId });
+    if (res.status === "error") return;
+    placeElements(res.elements);
+  }, [color, width, placeElements]);
+
+  const handlePickPreset = useCallback(
+    (preset: WBPreset) => {
+      if (preset.params.length === 0) insertPreset(preset, {});
+      else setPresetDialog(preset);
+    },
+    [insertPreset],
+  );
+
   // ---------- 快捷键（§5.2 hover 门控；绑定来自 bindings.ts 配置，不写死） ----------
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!hoverRef.current) return; // 门控：不在画板区域不响应
-      const target = e.target as HTMLElement;
-      if (target.closest("textarea, input, [contenteditable]")) return; // 文本编辑中让行
+      if (presetDialogRef.current) return; // 参数窗打开时不响应画板快捷键
+      if (shouldIgnoreShortcut(e)) return; // Shadow DOM 编辑控件、输入法和已处理事件让行
       const b = bindingsRef.current;
 
       if (matchKey(b.redo, e)) {
@@ -790,6 +915,11 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === bindingsRef.current.pan) {
+        const stage = stageRef.current;
+        if (stage?.isDragging()) {
+          stage.stopDrag();
+          setView((v) => ({ ...v, offsetX: stage.x(), offsetY: stage.y() }));
+        }
         spaceRef.current = false;
         setPanning(false);
       }
@@ -801,23 +931,6 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
       window.removeEventListener("keyup", onKeyUp);
     };
   }, [undo, redo, deleteSelected, copySelection, pasteClipboard, duplicateSelection]);
-
-  // 兜底：在画布外松开指针时，结束"整体移动"手势（舞台收不到 pointerup）
-  useEffect(() => {
-    const onWinUp = () => {
-      const mv = moveRef.current;
-      if (!mv) return;
-      moveRef.current = null;
-      setDraggingId(null);
-      if (mv.moved) {
-        justDraggedRef.current = true;
-        historyRef.current.push(mv.before);
-        setHistoryTick((t) => t + 1);
-      }
-    };
-    window.addEventListener("pointerup", onWinUp);
-    return () => window.removeEventListener("pointerup", onWinUp);
-  }, []);
 
   // ---------- 视图（缩放/平移） ----------
 
@@ -1017,7 +1130,9 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     [draft, epDrag, marquee, toWorld, findBindableAt],
   );
 
-  const onPointerUp = useCallback(() => {
+  const onPointerUp = useCallback((event: Konva.KonvaEventObject<PointerEvent>) => {
+    // Konva 对 pointercancel 也可能补发 pointerup，不能把取消当作正常提交。
+    if (event.evt.type === "pointercancel" || event.evt.type === "touchcancel") return;
     // 框选收尾
     if (marquee) {
       const m = marquee;
@@ -1442,6 +1557,63 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
     commitElements(next);
   }, [commitElements]);
 
+  // 中断不是正常 pointerup：不提交草稿或端点预览，已实时写入的移动只记一次历史。
+  const interruptGesture = useCallback(() => {
+    activePointerRef.current = null;
+    spaceRef.current = false;
+    hoverRef.current = false;
+    setPanning(false);
+    const stage = stageRef.current;
+    if (stage?.isDragging()) {
+      stage.stopDrag();
+      setView((v) => ({ ...v, offsetX: stage.x(), offsetY: stage.y() }));
+    }
+    const transformer = trRef.current;
+    if (transformer?.isTransforming()) {
+      // Konva stopTransform 同步发 transformend，由既有回调提交且归一化节点。
+      transformer.stopTransform();
+    }
+    const mv = moveRef.current;
+    moveRef.current = null;
+    if (mv?.moved) {
+      historyRef.current.push(mv.before);
+      setHistoryTick((t) => t + 1);
+    }
+    justDraggedRef.current = false; // 取消不会产生需要吞掉的正常 click
+    setDraggingId(null);
+    setDraft(null);
+    setEpDrag(null);
+    setSnapTargetId(null);
+    setMarquee(null);
+    if (containerRef.current) containerRef.current.style.cursor = "";
+  }, []);
+
+  useEffect(() => {
+    const onUp = (e: PointerEvent) => {
+      if (activePointerRef.current !== e.pointerId) return;
+      activePointerRef.current = null;
+      // 画布内正常松手由 Konva 提交；画布外只保留实时变更、丢弃预览。
+      const canvas = stageRef.current?.content;
+      if (!canvas || !e.composedPath().includes(canvas)) interruptGesture();
+    };
+    const onCancel = (e: PointerEvent) => {
+      if (activePointerRef.current === e.pointerId) interruptGesture();
+    };
+    const onVisibility = () => {
+      if (document.hidden) interruptGesture();
+    };
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", interruptGesture);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", interruptGesture);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [interruptGesture]);
+
   // 草稿预览元素
   const draftElement: WBElement | null = useMemo(() => {
     if (!draft) return null;
@@ -1583,14 +1755,30 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         onArrowheadChange={applyArrowhead}
       />
       <div className="la-wb-body">
-        <div className="la-wb-shapes">常用图形</div>
+        <ShapeRail onPick={handlePickPreset} />
         <div
           ref={containerRef}
           className="la-wb-stage"
+          onPointerDownCapture={(e) => {
+            if (e.button === 0 && e.target instanceof HTMLCanvasElement) {
+              activePointerRef.current = e.pointerId;
+              hoverRef.current = true;
+              justDraggedRef.current = false;
+            }
+          }}
+          onPointerMove={() => {
+            // 返回窗口后无需移出再移入才能恢复 hover 快捷键。
+            hoverRef.current = true;
+          }}
           onMouseEnter={() => (hoverRef.current = true)}
           onMouseLeave={() => {
             hoverRef.current = false;
             spaceRef.current = false;
+            const stage = stageRef.current;
+            if (stage?.isDragging()) {
+              stage.stopDrag();
+              setView((v) => ({ ...v, offsetX: stage.x(), offsetY: stage.y() }));
+            }
             setPanning(false);
             setMarquee(null); // 指针移出画布：中止框选，避免残留
           }}
@@ -1791,6 +1979,15 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
         >
           {Math.round(view.scale * 100)}%
         </button>
+        {/* [临时] 标注预览按钮（浮动，避免被工具栏裁掉）；P3 接上 AI 路径后删除 */}
+        <button
+          className="la-dev-demo"
+          title="插入带标注的示例 DSL（临时预览）"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={insertDemoDiagram}
+        >
+          [DEV] 示例标注
+        </button>
         {editing &&
           (() => {
             const el = elements.find((x) => x.id === editing.id);
@@ -1853,6 +2050,14 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
             }
             return null;
           })()}
+        {storageWarning && (
+          <div className="la-wb-storage-warn" role="status">
+            <span>{storageWarning}</span>
+            <button className="la-wb-tool" onClick={() => setStorageWarning(null)}>
+              知道了
+            </button>
+          </div>
+        )}
         {confirmClear && (
           <div className="la-wb-confirm">
             <span>清空当前画布？此操作可用撤销恢复。</span>
@@ -1869,6 +2074,16 @@ export function Whiteboard({ theme, gridMode, onDragPanel }: WhiteboardProps) {
               取消
             </button>
           </div>
+        )}
+        {presetDialog && (
+          <ParamDialog
+            preset={presetDialog}
+            onConfirm={(params) => {
+              insertPreset(presetDialog, params);
+              setPresetDialog(null);
+            }}
+            onCancel={() => setPresetDialog(null)}
+          />
         )}
         </div>
       </div>

@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://leetassist.local/dsl/llm-diagram.v2.json",
+  "title": "LeetAssist LlmDiagram v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dslVersion", "structures"],
+  "properties": {
+    "dslVersion": { "const": 2 },
+    "caption": { "type": "string", "maxLength": 200 },
+    "structures": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/structure" }
+    },
+    "annotations": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/annotation" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+    "value": {
+      "oneOf": [
+        { "type": "string", "maxLength": 200 },
+        { "type": "number" },
+        { "type": "null" }
+      ]
+    },
+    "color": {
+      "enum": ["default", "red", "blue", "green", "orange"]
+    },
+    "anchor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["struct", "at", "index"],
+          "properties": {
+            "struct": { "$ref": "#/$defs/id" },
+            "at": { "const": "cell" },
+            "index": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["struct", "at", "row", "col"],
+          "properties": {
+            "struct": { "$ref": "#/$defs/id" },
+            "at": { "const": "cell2" },
+            "row": { "type": "integer", "minimum": 0 },
+            "col": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["struct", "at", "id"],
+          "properties": {
+            "struct": { "$ref": "#/$defs/id" },
+            "at": { "const": "node" },
+            "id": { "$ref": "#/$defs/id" }
+          }
+        }
+      ]
+    },
+    "annotation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "anchor", "label"],
+          "properties": {
+            "kind": { "const": "pointer" },
+            "anchor": { "$ref": "#/$defs/anchor" },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[^\\n\\r]*\\S[^\\n\\r]*$"
+            },
+            "color": { "$ref": "#/$defs/color" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "anchor"],
+          "properties": {
+            "kind": { "const": "highlight" },
+            "anchor": { "$ref": "#/$defs/anchor" },
+            "color": { "$ref": "#/$defs/color" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "from", "to"],
+          "properties": {
+            "kind": { "const": "window" },
+            "from": { "$ref": "#/$defs/anchor" },
+            "to": { "$ref": "#/$defs/anchor" },
+            "label": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+            "color": { "$ref": "#/$defs/color" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "text"],
+          "properties": {
+            "kind": { "const": "note" },
+            "anchor": { "$ref": "#/$defs/anchor" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S" },
+            "color": { "$ref": "#/$defs/color" }
+          }
+        }
+      ]
+    },
+    "binaryNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "value": { "$ref": "#/$defs/value" },
+        "left": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/binaryNode" }] },
+        "right": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/binaryNode" }] }
+      }
+    },
+    "naryNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "value": { "$ref": "#/$defs/value" },
+        "children": {
+          "type": "array",
+          "items": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/naryNode" }] }
+        }
+      }
+    },
+    "structure": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "items"],
+          "properties": {
+            "kind": { "const": "array" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+            "indexed": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "rows"],
+          "properties": {
+            "kind": { "const": "matrix" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "rows": {
+              "type": "array",
+              "items": { "type": "array", "items": { "$ref": "#/$defs/value" } }
+            },
+            "rowHeaders": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+            "colHeaders": { "type": "array", "items": { "$ref": "#/$defs/value" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "entries"],
+          "properties": {
+            "kind": { "const": "map" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["key", "value"],
+                "properties": {
+                  "key": { "$ref": "#/$defs/value" },
+                  "value": { "$ref": "#/$defs/value" }
+                }
+              }
+            },
+            "header": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "nodes"],
+          "properties": {
+            "kind": { "const": "linkedList" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["values"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/id" },
+                  "values": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": { "$ref": "#/$defs/value" }
+                  }
+                }
+              }
+            },
+            "doubly": { "type": "boolean" },
+            "circular": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "items"],
+          "properties": {
+            "kind": { "const": "stack" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/value" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "items"],
+          "properties": {
+            "kind": { "const": "queue" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+            "deque": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "buckets"],
+          "properties": {
+            "kind": { "const": "bucket" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "buckets": {
+              "type": "array",
+              "items": { "type": "array", "items": { "$ref": "#/$defs/value" } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "values"],
+          "properties": {
+            "kind": { "const": "barChart" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "values": {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 }
+            },
+            "labels": { "type": "array", "items": { "$ref": "#/$defs/value" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "variant", "root"],
+          "properties": {
+            "kind": { "const": "tree" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "variant": { "const": "binary" },
+            "root": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/binaryNode" }] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "variant", "root"],
+          "properties": {
+            "kind": { "const": "tree" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "variant": { "const": "nary" },
+            "root": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/naryNode" }] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "values"],
+          "properties": {
+            "kind": { "const": "heap" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "values": { "type": "array", "items": { "$ref": "#/$defs/value" } },
+            "showArray": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "nodes", "edges"],
+          "properties": {
+            "kind": { "const": "graph" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/id" },
+                  "label": { "$ref": "#/$defs/value" }
+                }
+              }
+            },
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["from", "to"],
+                "properties": {
+                  "from": { "$ref": "#/$defs/id" },
+                  "to": { "$ref": "#/$defs/id" },
+                  "label": { "$ref": "#/$defs/value" },
+                  "weight": { "type": "number" }
+                }
+              }
+            },
+            "directed": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "states", "transitions"],
+          "properties": {
+            "kind": { "const": "stateMachine" },
+            "id": { "$ref": "#/$defs/id" },
+            "name": { "type": "string", "maxLength": 200 },
+            "states": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/id" },
+                  "label": { "$ref": "#/$defs/value" }
+                }
+              }
+            },
+            "transitions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["from", "to"],
+                "properties": {
+                  "from": { "$ref": "#/$defs/id" },
+                  "to": { "$ref": "#/$defs/id" },
+                  "label": { "type": "string", "maxLength": 200 }
+                }
+              }
+            },
+            "initial": { "$ref": "#/$defs/id" },
+            "accepting": { "type": "array", "items": { "$ref": "#/$defs/id" } }
+          }
+        }
+      ]
+    }
+  }
+}

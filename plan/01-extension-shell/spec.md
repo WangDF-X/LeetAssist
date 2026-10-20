@@ -2,15 +2,16 @@
 
 - 状态：Confirmed
 - 关联阶段：Phase 1
-- 最后更新：2026-09-15
-- 涉及代码目录：`src/background/`, `src/content/`, `src/panel/`（页内面板 React 应用）, `manifest.json`
+- 最后更新：2026-10-19
+- 涉及代码目录：`src/background/`, `src/content/`, `src/panel/`（页内面板 React 应用）, `src/options/`（独立扩展配置页）, `src/manifest.ts`
 
 ## 1. 目标（In Scope）
 
-- 基于 Chrome Extension Manifest V3 搭建插件骨架，插件名称 **LeetAssist**，仅支持 **leetcode.cn**。
+- 基于 Chromium 扩展 Manifest V3 搭建插件骨架，插件名称 **LeetAssist**，同时支持 **Chrome 与 Microsoft Edge 当前稳定版**，站点仅支持 **leetcode.cn**。
+- 两浏览器共用代码与数据契约，优先同一构建产物；扩展 API/权限及 UI 实测遵守 `AGENTS.md` §3.5、§4.3 双浏览器规则。兼容差异集中适配，不散落业务判断；两端本地数据不自动互通。
 - **悬浮 logo 入口**：题目页注入一个悬浮 logo 按钮（插件默认激活态）；点击以弹簧动画展开主面板；关闭时反向收回 logo。
 - **页内悬浮主面板**（用户 2026-09-15 提供新 UI 设计后，替代原 Chrome Side Panel 方案）：左画板 + 右 Agent 的双栏布局，中间一条竖直工具栏；面板整体可像窗口一样拖边调节大小；拖动中间分隔线可调节画板与 Agent 的比例。
-- 中间竖直工具栏承载模块入口：**计时 / 数据 / 白板设置 / 模型配置**（第一版范围），点击各自弹出 popover 窗口展示对应内容。
+- 中间竖直工具栏承载计时/数据/白板设置/模型配置入口；前三者沿用 popover，模型配置打开独立扩展页面（非网页 DOM 内凭据表单），详见 04 §3.1/3.8。
 - Content Script 读取题目信息（标题/难度/标签/URL/当前语言/当前代码/通过率），并监听 SPA 路由变化。
 
 ## 2. 明确不做
@@ -64,9 +65,10 @@
 ```
 
 - 左白板区默认占比约 55%–60%，符合常规画图比例（用户要求"白板区域稍大"）。
-- 中间竖直工具栏四个入口：计时 / 数据 / 白板设置 / 模型配置；hover 显示名称 tooltip；点击弹出锚定工具栏的 popover 窗口（不遮挡双栏主操作区，可关闭）。
+- 中间工具栏四入口 hover 显示名称；计时/数据/白板设置弹锚定 popover；模型配置作为主面板设置入口打开扩展自有 URL 的配置页，在该页输入 Provider/Key、申请权限及测试连接。标签页/独立窗口尺寸为实现细节，不以内嵌 Shadow DOM 弹层替代安全边界。
 - **整体 resize**：拖面板四边/四角像窗口一样调节（最小 720×480）；达到最小尺寸或视口边界时对侧边缘钉死，面板不会被"推着走"。
 - **整体移动**：拖拽左栏顶部工具行或右栏标题栏移动整个面板（栏内按钮除外），位置限制在视口内。
+- 面板移动/resize/比例/logo 手势按发起 pointerId 跟踪；pointercancel、window blur、页面 hidden 时保留最后合法布局并结束监听，logo 吸附右侧但不触发点击展开；卸载清理监听。正常与取消收尾均至多一次，非发起指针不结束手势。
 - **比例调节**：拖中间分隔线（工具栏所在列）调节白板:Agent 比例（允许范围 30%–70%）。
 - **单栏收起/展开**：工具栏两竖边外侧各一个"耳朵"按钮（带圆角矩形边框的小竖条，垂直居中、完全在工具栏外），左按钮控白板、右按钮控 Agent，同一位置切换收起/展开；对应栏收起后按钮贴到面板外缘；收起一侧后另一侧占满（面板总宽不变），栏宽与按钮位置带弹性过渡动画；任一栏收起时分隔线比例拖拽禁用；两栏都收起 = 直接收缩回悬浮 logo（下次打开恢复双栏展开）；顶部保留独立的"一键收回 logo"按钮；收起状态持久化，重开面板恢复。
 - 单栏可见时面板最小宽度放宽（720 → 480），双栏可见时仍为 720×480。
@@ -79,7 +81,9 @@
 
 ### 3.6 通信骨架
 
-- 面板 React 运行在 Content Script 的 isolated world（由 content script 注入），与 background 通过 `chrome.runtime` 消息通信；background 负责：badge 倒计时（05）、notifications（05）、运行时权限申请（04）。
+- 面板 React 运行在 Content Script isolated world，与 background 通过 runtime 消息通信。后台负责 badge/通知（05）、受控设置读写（02）、Provider fetch/认证/SSE/权限检查（04）；动态 permissions.request 在独立扩展配置页的明确用户手势内执行，不依赖跨层异步消息延续手势。
+- 01 提供打开内部设置页的语义命令及短消息/Port 通道骨架，URL 由扩展生成且不接受任意网页 URL；Provider 协议及网络状态唯一归 04，local 访问限制及摘要归 02。面板与配置页不使用网页 postMessage 暴露凭据或网络代理。
+- 独立设置页使用扩展本地资源/CSP，不加载远程脚本，不向网页声明可嵌入的凭据页面资源。后台仅允许可信内部页面做 Provider 管理，Content Script 仅允许安全摘要/已知 UI 设置/受控聊天命令。
 - 题目信息（`ProblemMeta`）由 content 层统一维护并广播给面板内各模块，避免各自重复抓取。
 
 ### 3.7 主题与设计令牌（Design Tokens）
@@ -135,7 +139,7 @@ interface ProblemMeta {
 
 ## 5. UI / 交互
 
-- Phase 1 验收形态：logo + 面板骨架（双栏 + 中间工具栏 + 四个 popover 占位）+ Agent 区头部显示题目信息（题号+题目+难度）。
+- 既有 Phase 1 曾用四个 popover 占位；后续模型配置按已确认独立扩展页落地，其余入口保持 popover。Agent 头部仍显示题目信息。
 - 各 popover 与双栏内部的具体内容由 03/04/05/02 spec 定义。
 
 ## 6. 依赖
@@ -151,11 +155,14 @@ interface ProblemMeta {
 - [ ] 面板四边/四角可窗口式 resize（到最小尺寸/视口边界时不漂移）；左栏顶部工具行/右栏标题栏可拖拽移动面板；中间分隔线可调双栏比例；尺寸、比例与 logo 位置下次打开恢复。
 - [ ] 白板/Agent 可通过工具栏两竖边外侧的"耳朵"按钮分别收起与展开，收起后另一侧占满；两栏都收起时面板收缩回 logo；收起状态持久化恢复。
 - [ ] 工具栏最底部主题按钮可循环切换 浅色/深色/跟随系统；跟随系统时随系统主题实时切换；选择持久化；面板全部 UI 元素（面板/工具栏/popover/耳朵/收起按钮）在两模式下颜色正确。
-- [ ] 中间工具栏四个入口（计时/数据/白板设置/模型配置）各自弹出 popover。
+- [ ] 计时/数据/白板设置打开 popover，模型配置打开独立扩展配置页；输入 Key/授权在扩展页面，主面板不回填已存 Key。
+- [ ] 受控配置消息与 AI Port 不开放任意 URL/存储字段；local 限制可信访问后既有布局/主题/快捷键不回归；Chrome/Edge 均验证配置入口和授权用户手势。
 - [ ] 切题（SPA 不刷新）时题目信息同步更新；刷新页面后重新正确识别。
 - [ ] 非 leetcode.cn 网站不出现 logo/面板。
 - [ ] 题目信息获取失败时有明确错误提示，不空白不崩溃。
 - [ ] 面板与页面样式互不污染（Shadow DOM 验证），不破坏 LeetCode 页面布局与操作。
+
+- [ ] **Chrome/Edge 双端**：同一待发布构建在两款当前稳定版完成加载、页面注入、面板开关/resize、路由切题、主题与持久化冒烟；记录版本及结果，未验证端明确标记。用户目前观察基本正常属于初步反馈，不替代逐次受影响路径验收。
 
 ## 8. 实现决策记录
 
@@ -167,6 +174,10 @@ interface ProblemMeta {
     "permissions": ["storage", "notifications"],
     "host_permissions": ["https://leetcode.cn/*"],
     "optional_host_permissions": ["https://*/*"],
+    "options_ui": {
+      "page": "src/options/index.html",
+      "open_in_tab": true
+    },
     "content_scripts": [
       {
         "matches": ["https://leetcode.cn/problems/*"],
@@ -179,7 +190,7 @@ interface ProblemMeta {
     ]
   }
   ```
-  说明：`storage` 用于配置持久化；`notifications` 用于计时到时通知（05）；`host_permissions` 仅 leetcode.cn；`optional_host_permissions` 供 04-ai-assistant 运行时按用户填写的 AI Base URL 动态申请（方案 B，安装时无警告）；`web_accessible_resources` 供 Shadow DOM 加载扩展内样式/资源。
+  说明：`storage` 用于配置持久化；`notifications` 用于计时到时通知（05）；`host_permissions` 仅 leetcode.cn；`optional_host_permissions` 供 04-ai-assistant 运行时按用户填写的 AI Base URL 动态申请（方案 B，安装时无警告）；`options_ui` 声明独立扩展配置页（04 §3.1/3.8，构建需提供 `src/options/index.html` 入口），主面板"模型配置"入口打开该页；`web_accessible_resources` 供 Shadow DOM 加载扩展内样式/资源。
 - **构建工具链**：Vite + `@crxjs/vite-plugin`（理由见历史记录：Vite 生态最活跃的扩展打包插件，自动处理 manifest/多入口/Content Script 热更新）。
 - **图标**：源文件 `plan/assets/logo.png`，实现时切 16/32/48/128 尺寸；悬浮 logo 复用同一视觉。
 
@@ -187,6 +198,10 @@ interface ProblemMeta {
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-19 | 面板/logo/resize/比例手势增加 pointerId 过滤、取消/失焦/隐藏收尾与卸载清理；取消不触发 logo 点击展开，新增窗口手势生命周期回归测试 |
+| 2026-10-19 | §8 manifest 补 `options_ui`（独立扩展配置页入口，构建需提供 `src/options/index.html`）；与 04 §3.1/3.8 对齐 |
+| 2026-10-19 | 用户确认主面板设置入口→独立扩展 Provider 页；更新原“模型 popover”设计，定义设置页/消息骨架与 SW 请求、可信存储职责分界 |
+| 2026-10-19 | 用户确认 Chrome/Edge 为共同目标；Manifest V3 共用产物优先，API/权限/行为兼容及双端验收联动 AGENTS.md |
 | 2026-09-12 | 根据总体规划文档整理出初稿 |
 | 2026-09-15 | 用户确认全部待确认问题；状态 Draft → Confirmed |
 | 2026-09-15 | V1 布局调整为两 Tab + 顶部计时条；ProblemMeta 增加 acceptanceRate；manifest 增加 notifications/optional_host_permissions |

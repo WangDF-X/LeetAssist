@@ -14,6 +14,7 @@ import {
   type ThemeMode,
 } from "./theme";
 import { Whiteboard } from "./whiteboard/Whiteboard";
+import { trackPointerGesture } from "./pointerGesture";
 
 interface Box {
   x: number;
@@ -159,6 +160,16 @@ export function PanelApp() {
   const panelRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLButtonElement>(null);
   const colAnimTimer = useRef<number | undefined>(undefined);
+  const gestureCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => gestureCleanupRef.current?.(), []);
+  const trackGesture = (
+    pointerId: number,
+    move: (event: PointerEvent) => void,
+    finish: (cancelled: boolean) => void,
+  ) => {
+    gestureCleanupRef.current?.();
+    gestureCleanupRef.current = trackPointerGesture(pointerId, move, finish);
+  };
 
   const boxRef = useRef(box);
   boxRef.current = box;
@@ -321,6 +332,7 @@ export function PanelApp() {
 
   // logo：6px 阈值区分"点击展开"与"拖动换位"；拖动只允许改变纵向位置，松手吸附回右边缘
   const onLogoPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     const logoEl = logoRef.current;
     if (logoEl) {
@@ -337,13 +349,17 @@ export function PanelApp() {
       if (!moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) moved = true;
       if (moved) setLogoPos(clampLogo({ x: orig.x + dx, y: orig.y + dy }));
     };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      if (moved) {
+    const up = (cancelled: boolean) => {
+      if (logoEl) {
+        logoEl.style.animation = "";
+        logoEl.style.transition = "";
+      }
+      if (moved || cancelled) {
         // 先恢复过渡再吸附，让"滑回右边缘"有动画
         if (logoEl) logoEl.style.transition = "";
-        setLogoPos((p) => ({ x: logoSnapX(), y: clampLogoY(p.y) }));
+        const snapped = { x: logoSnapX(), y: clampLogoY(logoPosRef.current.y) };
+        logoPosRef.current = snapped;
+        setLogoPos(snapped);
         persist();
       } else {
         if (logoEl) {
@@ -353,8 +369,7 @@ export function PanelApp() {
         setOpen(true);
       }
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    trackGesture(e.pointerId, move, up);
   };
 
   // 面板拖拽移动：左栏顶部工具行 / 右栏标题栏作为拖拽区
@@ -379,15 +394,13 @@ export function PanelApp() {
       );
     };
     const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
       persist();
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    trackGesture(e.pointerId, move, up);
   };
 
   const startResize = (edge: string) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
@@ -403,15 +416,13 @@ export function PanelApp() {
       );
     };
     const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
       persist();
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    trackGesture(e.pointerId, move, up);
   };
 
   const startRatioDrag = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
     e.preventDefault();
     if (collapsedRef.current.wb || collapsedRef.current.agent) return; // 单栏收起时比例无意义
     const startX = e.clientX;
@@ -421,12 +432,9 @@ export function PanelApp() {
       setRatio(clamp(startRatio + (ev.clientX - startX) / panelW, 0.3, 0.7));
     };
     const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
       persist();
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    trackGesture(e.pointerId, move, up);
   };
 
   // 布局宽度：双栏按 ratio 分配；单栏收起时另一侧占满（面板总宽不变）

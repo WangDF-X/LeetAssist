@@ -24,6 +24,7 @@ const LIGHT_VARS = `
   --la-amber: #fbbf24;
   --la-danger: #e5484d;
   --la-danger-strong: #d13438;
+  --la-scrim: rgba(30, 35, 60, 0.18);
   --la-shadow-panel: 0 18px 50px rgba(30, 35, 60, 0.28);
   --la-shadow-pop: 0 10px 30px rgba(30, 35, 60, 0.2);
   --la-shadow-ear: 0 2px 8px rgba(30, 35, 60, 0.15);
@@ -47,6 +48,7 @@ const DARK_VARS = `
   --la-amber: #fbbf24;
   --la-danger: #e5484d;
   --la-danger-strong: #d13438;
+  --la-scrim: rgba(0, 0, 0, 0.4);
   --la-shadow-panel: 0 18px 50px rgba(0, 0, 0, 0.55);
   --la-shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.45);
   --la-shadow-ear: 0 2px 8px rgba(0, 0, 0, 0.4);
