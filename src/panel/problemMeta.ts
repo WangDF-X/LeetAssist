@@ -18,7 +18,8 @@ export interface ProblemMeta {
   acceptanceRate: number;
 }
 
-const GRAPHQL_URL = "https://leetcode.cn/graphql/";
+// 供 04 上下文快照（problemContext）复用同一数据源
+export const GRAPHQL_URL = "https://leetcode.cn/graphql/";
 
 const QUESTION_QUERY = `query questionData($titleSlug: String!) {
   question(titleSlug: $titleSlug) {

@@ -16,6 +16,7 @@ import {
 import { Whiteboard } from "./whiteboard/Whiteboard";
 import { trackPointerGesture } from "./pointerGesture";
 import { requestOpenOptionsPage } from "../ai/uiCommands";
+import { fetchUiSettings, pushUiSettings } from "../storage/uiSettingsClient";
 
 interface Box {
   x: number;
@@ -212,29 +213,22 @@ export function PanelApp() {
     };
   }, [problemId]);
 
+  // 布局/主题等设置经受控消息读取（02 §3.5–3.6：Content Script 不再直接访问 storage.local）
   useEffect(() => {
-    chrome.storage.local.get(
-      ["panelBox", "panelRatio", "logoY", "collapsed", "themeMode", "gridMode"],
-      (saved) => {
-        if (saved.panelBox) setBox(clampBox(saved.panelBox as Box));
-        if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
-        if (typeof saved.logoY === "number")
-          setLogoPos({ x: logoSnapX(), y: clampLogoY(saved.logoY) });
-        if (saved.collapsed) setCollapsed(saved.collapsed as CollapsedState);
-        if (
-          saved.themeMode === "light" ||
-          saved.themeMode === "dark" ||
-          saved.themeMode === "system"
-        )
-          setThemeMode(saved.themeMode);
-        if (
-          saved.gridMode === "dots" ||
-          saved.gridMode === "lines" ||
-          saved.gridMode === "none"
-        )
-          setGridMode(saved.gridMode);
-      },
-    );
+    let cancelled = false;
+    fetchUiSettings().then((saved) => {
+      if (cancelled || !saved) return;
+      if (saved.panelBox) setBox(clampBox(saved.panelBox));
+      if (typeof saved.panelRatio === "number") setRatio(saved.panelRatio);
+      if (typeof saved.logoY === "number")
+        setLogoPos({ x: logoSnapX(), y: clampLogoY(saved.logoY) });
+      if (saved.collapsed) setCollapsed(saved.collapsed);
+      if (saved.themeMode) setThemeMode(saved.themeMode);
+      if (saved.gridMode) setGridMode(saved.gridMode);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // 跟随系统模式：监听系统主题变化
@@ -256,7 +250,8 @@ export function PanelApp() {
   }, []);
 
   const persist = useCallback(() => {
-    chrome.storage.local.set({
+    // 经受控消息写回（02 §3.6）；失败时保留当前会话状态，不回退
+    void pushUiSettings({
       panelBox: boxRef.current,
       panelRatio: ratioRef.current,
       logoY: logoPosRef.current.y,
@@ -455,7 +450,7 @@ export function PanelApp() {
   const cycleTheme = () => {
     const next = nextThemeMode(themeMode);
     setThemeMode(next);
-    chrome.storage.local.set({ themeMode: next });
+    void pushUiSettings({ themeMode: next });
   };
 
   return (

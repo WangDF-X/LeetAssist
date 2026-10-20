@@ -52,6 +52,26 @@ body {
   margin-bottom: 12px;
 }
 
+.oa-orphans {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--la-text);
+  border-left: 3px solid var(--la-amber);
+  background: var(--la-toolbar-bg);
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  word-break: break-all;
+}
+
+.oa-orphans .oa-btn {
+  flex-shrink: 0;
+}
+
 .oa-empty {
   padding: 28px;
   text-align: center;
@@ -289,6 +309,11 @@ body {
 
 .oa-modal-body p {
   margin: 0 0 8px;
+}
+
+.oa-modal-body ul {
+  margin: 6px 0;
+  padding-left: 18px;
 }
 
 .oa-modal-foot {
