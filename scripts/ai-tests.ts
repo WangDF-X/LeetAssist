@@ -9,7 +9,7 @@ import {
   planHostPermissionChange,
   planHostPermissionCleanup,
 } from "../src/ai/hostPermissions";
-import { PROVIDER_PRESETS } from "../src/ai/presets";
+import { PROVIDER_PRESETS, planPresetFill } from "../src/ai/presets";
 import type { ProviderConfig } from "../src/ai/types";
 import { htmlToText, splitProblemContent } from "../src/ai/problemContext";
 import {
@@ -47,9 +47,62 @@ const port = checkBaseUrl("https://api.example.com:8443/v1");
 check("非默认端口 pattern", port.ok && port.originPattern === "https://api.example.com:8443/*");
 check("路径不进入 pattern", port.ok && !port.originPattern.includes("/v1"));
 
+// ---- 预置服务与按协议填充（04 §3.6，方案 A） ----
+
 for (const p of PROVIDER_PRESETS) {
-  check(`预置 ${p.name} Base URL 合法`, checkBaseUrl(p.baseUrl).ok);
+  check(`预置 ${p.name}：至少一个端点`, Boolean(p.openai || p.anthropic));
+  if (p.openai) {
+    check(`预置 ${p.name}（OpenAI）端点合法`, checkBaseUrl(p.openai.baseUrl).ok);
+  }
+  if (p.anthropic) {
+    check(`预置 ${p.name}（Anthropic）端点合法`, checkBaseUrl(p.anthropic.baseUrl).ok);
+  }
 }
+check(
+  "预置：服务名不重复",
+  new Set(PROVIDER_PRESETS.map((p) => p.name)).size === PROVIDER_PRESETS.length,
+);
+
+const glmPreset = PROVIDER_PRESETS.find((p) => p.name === "GLM Coding Plan")!;
+const glmOpenai = planPresetFill(glmPreset, "openai-compatible");
+check(
+  "预置填充：双端服务按 OpenAI 协议取端点",
+  glmOpenai !== null &&
+    glmOpenai.protocol === "openai-compatible" &&
+    glmOpenai.baseUrl === "https://open.bigmodel.cn/api/coding/paas/v4" &&
+    glmOpenai.model === "glm-5.3" &&
+    glmOpenai.contextWindow === 1000000,
+);
+const glmAnthropic = planPresetFill(glmPreset, "anthropic");
+check(
+  "预置填充：双端服务按 Anthropic 协议取端点",
+  glmAnthropic !== null &&
+    glmAnthropic.protocol === "anthropic" &&
+    glmAnthropic.baseUrl === "https://open.bigmodel.cn/api/anthropic",
+);
+
+const zenPreset = PROVIDER_PRESETS.find((p) => p.name === "OpenCode Zen")!;
+const zenFallback = planPresetFill(zenPreset, "anthropic");
+check(
+  "预置填充：无 Anthropic 端点时回退并切换协议",
+  zenFallback !== null &&
+    zenFallback.protocol === "openai-compatible" &&
+    zenFallback.baseUrl === "https://opencode.ai/zen/v1",
+);
+
+const ccPreset = PROVIDER_PRESETS.find((p) => p.name === "Command Code GOAT")!;
+const ccOpenai = planPresetFill(ccPreset, "openai-compatible");
+check(
+  "预置填充：未核实模型时 model/window 缺省",
+  ccOpenai !== null && ccOpenai.model === undefined && ccOpenai.contextWindow === undefined,
+);
+
+const dsPreset = PROVIDER_PRESETS.find((p) => p.name === "DeepSeek API")!;
+check(
+  "预置：DeepSeek 已含 Anthropic 端点（2026-10-21 官方文档）",
+  Boolean(dsPreset.anthropic) &&
+    planPresetFill(dsPreset, "anthropic")?.baseUrl === "https://api.deepseek.com/anthropic",
+);
 
 check(
   "originPatternOf 可直接复用",

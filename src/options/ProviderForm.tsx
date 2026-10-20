@@ -1,5 +1,5 @@
 import { checkBaseUrl } from "../ai/baseUrl";
-import { PROVIDER_PRESETS } from "../ai/presets";
+import { PROVIDER_PRESETS, planPresetFill, type ProviderPreset } from "../ai/presets";
 import type { ProviderDraft } from "./providerDraft";
 import { useHostPermission } from "./useHostPermission";
 
@@ -22,24 +22,33 @@ export function ProviderForm({
   const pattern = baseCheck.ok ? baseCheck.originPattern : null;
   const granted = useHostPermission(pattern);
 
+  /** 方案 A：按当前协议填对应端点；无对应端点时回退并切换协议（04 §3.6） */
+  const applyPreset = (preset: ProviderPreset) => {
+    const plan = planPresetFill(preset, draft.protocol);
+    if (!plan) return;
+    const patch: Partial<ProviderDraft> = {
+      name: preset.name,
+      protocol: plan.protocol,
+      baseUrl: plan.baseUrl,
+    };
+    // 未核实默认模型/窗口时不覆盖用户已填内容
+    if (plan.model !== undefined) patch.model = plan.model;
+    if (plan.contextWindow !== undefined) {
+      patch.contextWindow = String(plan.contextWindow);
+    }
+    onChange(patch);
+  };
+
   return (
     <div className="oa-form">
       <div className="oa-presets">
-        <span className="oa-presets-label">预置快速填入：</span>
+        <span className="oa-presets-label">预置快速填入（按当前协议自动选端点）：</span>
         {PROVIDER_PRESETS.map((p) => (
           <button
             key={p.name}
             type="button"
             className="oa-btn"
-            onClick={() =>
-              onChange({
-                name: p.name,
-                protocol: p.protocol,
-                baseUrl: p.baseUrl,
-                model: p.model,
-                contextWindow: String(p.contextWindow),
-              })
-            }
+            onClick={() => applyPreset(p)}
           >
             {p.name}
           </button>
