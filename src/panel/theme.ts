@@ -55,12 +55,15 @@ const DARK_VARS = `
   --la-shadow-logo: 0 6px 18px rgba(0, 0, 0, 0.5);
 `;
 
+// 按 data-theme 生成指定作用域的 token 定义；Shadow 面板用 ".la-root"，
+// 独立扩展页面（options）用 ":root"。token 唯一来源仍是本文件（01 §3.7）。
+export function themeVarsCss(scope: string): string {
+  return `${scope}[data-theme="light"] {${LIGHT_VARS}}\n${scope}[data-theme="dark"] {${DARK_VARS}}\n`;
+}
+
 // 注入在 Shadow Root 内：.la-root（PanelApp 根节点）上按 data-theme 声明变量，
 // 所有后代选择器直接 var() 引用
-export const THEME_VARS_CSS = `
-.la-root[data-theme="light"] {${LIGHT_VARS}}
-.la-root[data-theme="dark"] {${DARK_VARS}}
-`;
+export const THEME_VARS_CSS = themeVarsCss(".la-root");
 
 export function resolveTheme(
   mode: ThemeMode,
