@@ -1,8 +1,8 @@
 # 02. Storage（本地存储与导入导出）Spec
 
-- 状态：In Progress（2026-09-21 起，随 `feature/whiteboard-konva` 落地最小骨架：Dexie + sessions 表；导入导出/用量展示后续单独分支）
+- 状态：In Progress（2026-09-21 起，随 `feature/whiteboard-konva` 落地最小骨架：Dexie + sessions 表；2026-10-20 落地可信 local 访问级别 + 受控设置消息、Provider 持久化、conversations/codeSnapshots 表；导入导出/用量展示后续单独分支）
 - 关联阶段：Phase 2 起（画板需要落地存储），贯穿全项目
-- 最后更新：2026-10-19
+- 最后更新：2026-10-20
 - 涉及代码目录：`src/storage/settings.ts`, `src/storage/database.ts`, `src/storage/backup.ts`
 
 ## 1. 目标（In Scope）
@@ -203,6 +203,7 @@ API Key:  [***************]
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-20 | 落地 §3.5–3.6：`setAccessLevel(TRUSTED_CONTEXTS)` 初始化 + 受控设置消息（白名单字段校验 + sender 校验）；PanelApp/白板 bindings 移除直接 local 读写；Provider 持久化（配置页接通）；Dexie v2 conversations/codeSnapshots；首次保存提醒标记持久化。面板 ProviderSummary 同步/导入导出仍待后续（无消费者，P5/后续分支） |
 | 2026-10-19 | 对齐 Provider SW 代理：可信 local 访问、独立扩展凭据设置、无 Key 摘要/受控设置读写、既有直接 local 调用迁移、可信导入导出；修正“不会发往任何服务器”的误导说明 |
 | 2026-09-12 | 根据总体规划文档整理出初稿 |
 | 2026-09-15 | 确认 Dexie、schemaVersion + 惰性兼容迁移策略、存储用量展示替代清理提醒、Import 冲突"逐条选择、仅冲突项需要处理"的交互设计 |

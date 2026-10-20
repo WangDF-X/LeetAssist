@@ -1,6 +1,6 @@
 // IndexedDB 唯一入口（02-storage spec §3.1）：Dexie 封装。
-// 当前仅落地画板所需最小骨架（sessions 表 + ProblemSession）；
-// conversations / codeSnapshots 表随 04-ai-assistant 后续版本链增加。
+// v1：画板所需最小骨架（sessions 表 + ProblemSession）；
+// v2：04 §3.3 对话/代码快照表（结构见 02 §4，P4 会话持久化使用）。
 import Dexie, { type EntityTable } from "dexie";
 
 export const SESSION_SCHEMA_VERSION = 1;
@@ -50,12 +50,40 @@ export function createEmptySession(
   };
 }
 
+/** 一个题目下的一个对话（02 §4，字段与 04 §3.3 对齐；contextSnapshot 每对话只存一份） */
+export interface Conversation {
+  id: string;
+  problemId: string;
+  title: string; // 直接读网页：题号+题目+难度
+  contextSnapshot: unknown; // 题目描述/约束快照（04 §3.3，去重载体）
+  messages: unknown[]; // ConversationMessage[]，结构见 04 §4
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** @code 代码附件快照（02 §4；消息内引用 id，同一份代码不重复存） */
+export interface CodeSnapshot {
+  id: string;
+  problemId: string;
+  language: string;
+  code: string;
+  createdAt: string;
+}
+
 const db = new Dexie("leetassist") as Dexie & {
   sessions: EntityTable<ProblemSession, "problemId">;
+  conversations: EntityTable<Conversation, "id">;
+  codeSnapshots: EntityTable<CodeSnapshot, "id">;
 };
 
 db.version(1).stores({
   sessions: "problemId, updatedAt",
+});
+
+// v2 只声明新增表（Dexie 版本链增量合并，旧表不受影响）
+db.version(2).stores({
+  conversations: "id, problemId, updatedAt",
+  codeSnapshots: "id, problemId",
 });
 
 /** 读取会话：缺失字段用默认值兜底（惰性兼容，02 spec §3.2）；无记录返回 null */

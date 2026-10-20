@@ -1,8 +1,9 @@
 // 画板交互绑定配置（数据驱动）。
 // 背景：用户计划后续支持自定义快捷键（如"右键 = 文本工具"可改）。
 // 因此所有"键/鼠标动作 → 行为"的映射集中在本文件，UI 只读配置不写死；
-// 未来设置页把用户覆盖写入 chrome.storage.local 的 wbBindings 即可生效，无需改交互代码。
+// 未来设置页把用户覆盖写入 wbBindings（经受控设置消息，02 §3.6）即可生效，无需改交互代码。
 import type { WBTool } from "./Toolbar";
+import { fetchWbBindings } from "../../storage/uiSettingsClient";
 
 /** 单键/组合键绑定描述 */
 export interface KeyBinding {
@@ -43,23 +44,18 @@ export const DEFAULT_BINDINGS: WBBindings = {
   contextMenu: "quickText",
 };
 
-const STORAGE_KEY = "wbBindings";
-
 /**
  * 读取生效绑定 = 默认绑定 + 用户覆盖（用户自定义功能未做，当前恒等于默认）。
- * 工具键表做一层浅合并，允许用户只改个别键。
+ * 用户覆盖经受控设置消息读取（02 §3.6：Content Script 不直接访问 storage.local）；
+ * 读取失败返回全默认。工具键表做一层浅合并，允许用户只改个别键。
  */
 export async function loadBindings(): Promise<WBBindings> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEY], (saved) => {
-      const user = saved[STORAGE_KEY] as Partial<WBBindings> | undefined;
-      resolve({
-        ...DEFAULT_BINDINGS,
-        ...(user ?? {}),
-        tools: { ...DEFAULT_BINDINGS.tools, ...(user?.tools ?? {}) },
-      });
-    });
-  });
+  const user = await fetchWbBindings();
+  return {
+    ...DEFAULT_BINDINGS,
+    ...(user ?? {}),
+    tools: { ...DEFAULT_BINDINGS.tools, ...(user?.tools ?? {}) },
+  };
 }
 
 /** 判断画板快捷键是否应让行给编辑控件、输入法或其他已处理事件。 */
