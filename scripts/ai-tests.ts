@@ -6,6 +6,7 @@ import {
   grantedPatternsForHost,
   listOrphanGrantedHosts,
   patternHost,
+  planHostPermissionChange,
   planHostPermissionCleanup,
 } from "../src/ai/hostPermissions";
 import { PROVIDER_PRESETS } from "../src/ai/presets";
@@ -155,6 +156,55 @@ const pathDiff = planHostPermissionCleanup("https://h.example/*", [
 check(
   "回收决策：同 host 不同路径仍算共用",
   pathDiff.action === "skip" && pathDiff.reason === "shared",
+);
+
+// ---- 编辑 Provider 换主机后的回收决策（04 §3.8.6 编辑路径） ----
+
+const editUnchanged = planHostPermissionChange(
+  "https://h.example/*",
+  "https://h.example/*",
+  [provider("a", "https://h.example/v1")],
+);
+check(
+  "换主机决策：新旧相同不处理",
+  editUnchanged.action === "skip" && editUnchanged.reason === "unchanged",
+);
+
+const editNoOld = planHostPermissionChange(null, "https://new.example/*", []);
+check(
+  "换主机决策：无旧主机跳过",
+  editNoOld.action === "skip" && editNoOld.reason === "no-pattern",
+);
+
+// 保存后列表：被编辑的 Provider 已指向新主机，旧主机无其他使用者
+const editMoved = planHostPermissionChange(
+  "https://old.example/*",
+  "https://new.example/*",
+  [provider("a", "https://new.example/v1")],
+);
+check(
+  "换主机决策：旧主机无共用则回收",
+  editMoved.action === "remove" && editMoved.pattern === "https://old.example/*",
+);
+
+const editShared = planHostPermissionChange(
+  "https://old.example/*",
+  "https://new.example/*",
+  [provider("a", "https://new.example/v1"), provider("b", "https://old.example/v2")],
+);
+check(
+  "换主机决策：旧主机仍被共用保留",
+  editShared.action === "skip" && editShared.reason === "shared",
+);
+
+const editBase = planHostPermissionChange(
+  "https://leetcode.cn/*",
+  "https://new.example/*",
+  [],
+);
+check(
+  "换主机决策：leetcode.cn 基础权限跳过",
+  editBase.action === "skip" && editBase.reason === "base-permission",
 );
 
 // ---- 已授予 pattern 反查（精确回收） ----
