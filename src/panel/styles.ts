@@ -605,6 +605,35 @@ ${THEME_VARS_CSS}
   color: var(--la-text-dim);
 }
 
+/* 模型入口的跳转确认卡（新标签页打开配置页前提示） */
+.la-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 300px;
+  color: var(--la-text);
+}
+.la-confirm-title { font-size: 13px; font-weight: 600; }
+.la-confirm-text { line-height: 1.6; }
+.la-confirm-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.la-btn {
+  border: 1px solid var(--la-border);
+  border-radius: 6px;
+  background: var(--la-surface);
+  color: var(--la-text);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.la-btn:hover { background: var(--la-hover); }
+.la-btn[data-variant="primary"] {
+  background: var(--la-accent);
+  border-color: var(--la-accent);
+  color: var(--la-on-accent);
+}
+.la-btn[data-variant="primary"]:hover { background: var(--la-accent-strong); }
+
 /* 面板拖拽区（左栏顶部工具行 / 右栏标题栏） */
 .la-drag { cursor: move; user-select: none; }
 

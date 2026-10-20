@@ -15,6 +15,7 @@ import {
 } from "./theme";
 import { Whiteboard } from "./whiteboard/Whiteboard";
 import { trackPointerGesture } from "./pointerGesture";
+import { requestOpenOptionsPage } from "../ai/uiCommands";
 
 interface Box {
   x: number;
@@ -147,6 +148,8 @@ export function PanelApp() {
     agent: false,
   });
   const [popover, setPopover] = useState<ToolId | null>(null);
+  // 模型入口的跳转确认卡（打开独立配置页前提示，用户确认后才跳转）
+  const [optionsPrompt, setOptionsPrompt] = useState(false);
   const [logoPos, setLogoPos] = useState<Point>(defaultLogoPos);
   // 单栏收起/展开的宽度过渡开关（仅在切换瞬间开启，避免拖拽比例时被过渡拖慢）
   const [colAnim, setColAnim] = useState(false);
@@ -298,6 +301,7 @@ export function PanelApp() {
 
   const closePanel = useCallback(() => {
     setPopover(null);
+    setOptionsPrompt(false);
     persistOnClose();
     const el = panelRef.current;
     if (!el) {
@@ -506,8 +510,21 @@ export function PanelApp() {
               key={t.id}
               className="la-tool-btn"
               data-active={popover === t.id}
+              title={
+                t.id === "model" ? "打开扩展设置页（Provider 配置）" : undefined
+              }
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => setPopover((p) => (p === t.id ? null : t.id))}
+              onClick={() => {
+                // 模型配置打开独立扩展配置页（01 §3.4/§3.6，经 SW 语义命令，URL 由扩展生成）；
+                // 先弹确认卡，确认后在新标签页打开
+                if (t.id === "model") {
+                  setPopover(null);
+                  setOptionsPrompt((v) => !v);
+                  return;
+                }
+                setOptionsPrompt(false);
+                setPopover((p) => (p === t.id ? null : t.id));
+              }}
             >
               {t.label}
             </button>
@@ -627,6 +644,34 @@ export function PanelApp() {
           style={{ left: box.x + wbWidth + TOOLBAR_W + 8, top: box.y + 56 }}
         >
           {TOOLS.find((t) => t.id === popover)?.label} popover（占位，后续模块实现）
+        </div>
+      )}
+      {optionsPrompt && open && (
+        <div
+          className="la-popover"
+          style={{ left: box.x + wbWidth + TOOLBAR_W + 8, top: box.y + 56 }}
+        >
+          <div className="la-confirm">
+            <div className="la-confirm-title">模型配置</div>
+            <div className="la-confirm-text">
+              模型与 API Key 在独立扩展设置页中配置，将在新标签页打开。
+            </div>
+            <div className="la-confirm-foot">
+              <button className="la-btn" onClick={() => setOptionsPrompt(false)}>
+                取消
+              </button>
+              <button
+                className="la-btn"
+                data-variant="primary"
+                onClick={() => {
+                  setOptionsPrompt(false);
+                  requestOpenOptionsPage();
+                }}
+              >
+                打开设置页
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

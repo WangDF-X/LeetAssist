@@ -14,6 +14,10 @@ export default defineManifest({
     service_worker: "src/background/service-worker.ts",
     type: "module",
   },
+  options_ui: {
+    page: "src/options/index.html",
+    open_in_tab: true,
+  },
   content_scripts: [
     {
       matches: ["https://leetcode.cn/problems/*"],
