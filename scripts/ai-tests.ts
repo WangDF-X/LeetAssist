@@ -6,9 +6,10 @@ import {
   grantedPatternsForHost,
   listOrphanGrantedHosts,
   patternHost,
+  planHostPermissionChange,
   planHostPermissionCleanup,
 } from "../src/ai/hostPermissions";
-import { PROVIDER_PRESETS } from "../src/ai/presets";
+import { PROVIDER_PRESETS, planPresetFill } from "../src/ai/presets";
 import type { ProviderConfig } from "../src/ai/types";
 import { htmlToText, splitProblemContent } from "../src/ai/problemContext";
 import {
@@ -46,9 +47,62 @@ const port = checkBaseUrl("https://api.example.com:8443/v1");
 check("非默认端口 pattern", port.ok && port.originPattern === "https://api.example.com:8443/*");
 check("路径不进入 pattern", port.ok && !port.originPattern.includes("/v1"));
 
+// ---- 预置服务与按协议填充（04 §3.6，方案 A） ----
+
 for (const p of PROVIDER_PRESETS) {
-  check(`预置 ${p.name} Base URL 合法`, checkBaseUrl(p.baseUrl).ok);
+  check(`预置 ${p.name}：至少一个端点`, Boolean(p.openai || p.anthropic));
+  if (p.openai) {
+    check(`预置 ${p.name}（OpenAI）端点合法`, checkBaseUrl(p.openai.baseUrl).ok);
+  }
+  if (p.anthropic) {
+    check(`预置 ${p.name}（Anthropic）端点合法`, checkBaseUrl(p.anthropic.baseUrl).ok);
+  }
 }
+check(
+  "预置：服务名不重复",
+  new Set(PROVIDER_PRESETS.map((p) => p.name)).size === PROVIDER_PRESETS.length,
+);
+
+const glmPreset = PROVIDER_PRESETS.find((p) => p.name === "GLM Coding Plan")!;
+const glmOpenai = planPresetFill(glmPreset, "openai-compatible");
+check(
+  "预置填充：双端服务按 OpenAI 协议取端点",
+  glmOpenai !== null &&
+    glmOpenai.protocol === "openai-compatible" &&
+    glmOpenai.baseUrl === "https://open.bigmodel.cn/api/coding/paas/v4" &&
+    glmOpenai.model === "glm-5.3" &&
+    glmOpenai.contextWindow === 1000000,
+);
+const glmAnthropic = planPresetFill(glmPreset, "anthropic");
+check(
+  "预置填充：双端服务按 Anthropic 协议取端点",
+  glmAnthropic !== null &&
+    glmAnthropic.protocol === "anthropic" &&
+    glmAnthropic.baseUrl === "https://open.bigmodel.cn/api/anthropic",
+);
+
+const zenPreset = PROVIDER_PRESETS.find((p) => p.name === "OpenCode Zen")!;
+const zenFallback = planPresetFill(zenPreset, "anthropic");
+check(
+  "预置填充：无 Anthropic 端点时回退并切换协议",
+  zenFallback !== null &&
+    zenFallback.protocol === "openai-compatible" &&
+    zenFallback.baseUrl === "https://opencode.ai/zen/v1",
+);
+
+const ccPreset = PROVIDER_PRESETS.find((p) => p.name === "Command Code GOAT")!;
+const ccOpenai = planPresetFill(ccPreset, "openai-compatible");
+check(
+  "预置填充：未核实模型时 model/window 缺省",
+  ccOpenai !== null && ccOpenai.model === undefined && ccOpenai.contextWindow === undefined,
+);
+
+const dsPreset = PROVIDER_PRESETS.find((p) => p.name === "DeepSeek API")!;
+check(
+  "预置：DeepSeek 已含 Anthropic 端点（2026-10-21 官方文档）",
+  Boolean(dsPreset.anthropic) &&
+    planPresetFill(dsPreset, "anthropic")?.baseUrl === "https://api.deepseek.com/anthropic",
+);
 
 check(
   "originPatternOf 可直接复用",
@@ -155,6 +209,55 @@ const pathDiff = planHostPermissionCleanup("https://h.example/*", [
 check(
   "回收决策：同 host 不同路径仍算共用",
   pathDiff.action === "skip" && pathDiff.reason === "shared",
+);
+
+// ---- 编辑 Provider 换主机后的回收决策（04 §3.8.6 编辑路径） ----
+
+const editUnchanged = planHostPermissionChange(
+  "https://h.example/*",
+  "https://h.example/*",
+  [provider("a", "https://h.example/v1")],
+);
+check(
+  "换主机决策：新旧相同不处理",
+  editUnchanged.action === "skip" && editUnchanged.reason === "unchanged",
+);
+
+const editNoOld = planHostPermissionChange(null, "https://new.example/*", []);
+check(
+  "换主机决策：无旧主机跳过",
+  editNoOld.action === "skip" && editNoOld.reason === "no-pattern",
+);
+
+// 保存后列表：被编辑的 Provider 已指向新主机，旧主机无其他使用者
+const editMoved = planHostPermissionChange(
+  "https://old.example/*",
+  "https://new.example/*",
+  [provider("a", "https://new.example/v1")],
+);
+check(
+  "换主机决策：旧主机无共用则回收",
+  editMoved.action === "remove" && editMoved.pattern === "https://old.example/*",
+);
+
+const editShared = planHostPermissionChange(
+  "https://old.example/*",
+  "https://new.example/*",
+  [provider("a", "https://new.example/v1"), provider("b", "https://old.example/v2")],
+);
+check(
+  "换主机决策：旧主机仍被共用保留",
+  editShared.action === "skip" && editShared.reason === "shared",
+);
+
+const editBase = planHostPermissionChange(
+  "https://leetcode.cn/*",
+  "https://new.example/*",
+  [],
+);
+check(
+  "换主机决策：leetcode.cn 基础权限跳过",
+  editBase.action === "skip" && editBase.reason === "base-permission",
 );
 
 // ---- 已授予 pattern 反查（精确回收） ----

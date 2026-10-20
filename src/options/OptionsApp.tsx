@@ -8,6 +8,7 @@ import { checkBaseUrl } from "../ai/baseUrl";
 import {
   grantedPatternsForHost,
   listOrphanGrantedHosts,
+  planHostPermissionChange,
   planHostPermissionCleanup,
 } from "../ai/hostPermissions";
 import type { ProviderConfig } from "../ai/types";
@@ -66,26 +67,18 @@ type DialogState =
   | { kind: "cleanup"; hosts: string[] }
   | null;
 
-/** 删除 Provider 后清理不再被使用的主机授权（04 §3.8.6），并返回可展示的结果说明：
- *  该环节不允许静默失败——回收失败/未授予/共用保留都要能看见。
+/** 实际执行主机授权回收，并返回可展示的结果说明：
+ *  该环节不允许静默失败——回收失败/未授予/未生效都要能看见。
  *  实现：用 permissions.getAll() 反查浏览器实际授予的 pattern 再精确移除，
  *  避免请求 pattern 与授予表示形式不一致时 remove 无效。 */
-async function cleanupHostPermission(pattern: string | null): Promise<string> {
+async function removeGrantedHostPermission(pattern: string): Promise<string> {
   try {
-    const rest = await listProviders();
-    const decision = planHostPermissionCleanup(pattern, rest);
-    if (decision.action === "skip") {
-      if (decision.reason === "shared") {
-        return "主机授权保留（仍被其他 Provider 共用）";
-      }
-      return "";
-    }
     const granted = grantedPatternsForHost(
       (await chrome.permissions.getAll()).origins ?? [],
-      decision.pattern,
+      pattern,
     );
     if (granted.length === 0) {
-      return `主机授权 ${decision.pattern} 未处于已授予状态，无需回收`;
+      return `主机授权 ${pattern} 未处于已授予状态，无需回收`;
     }
     const failed: string[] = [];
     for (const p of granted) {
@@ -99,7 +92,7 @@ async function cleanupHostPermission(pattern: string | null): Promise<string> {
     // 以浏览器当前权限为准复查（remove 返回值在部分浏览器上可能与实际状态不一致）
     const remaining = grantedPatternsForHost(
       (await chrome.permissions.getAll()).origins ?? [],
-      decision.pattern,
+      pattern,
     );
     if (remaining.length === 0) return `已回收主机授权 ${granted.join("、")}`;
     const reason =
@@ -107,6 +100,23 @@ async function cleanupHostPermission(pattern: string | null): Promise<string> {
         ? `（remove 调用异常：${failed.join("、")}）`
         : "（remove 已调用但浏览器未生效）";
     return `主机授权仍处于已授予状态：${remaining.join("、")}${reason}，可在扩展管理页手动移除`;
+  } catch (e) {
+    return `主机授权回收失败：${String(e)}`;
+  }
+}
+
+/** 删除 Provider 后清理不再被使用的主机授权（04 §3.8.6），并返回可展示的结果说明 */
+async function cleanupHostPermission(pattern: string | null): Promise<string> {
+  try {
+    const rest = await listProviders();
+    const decision = planHostPermissionCleanup(pattern, rest);
+    if (decision.action === "skip") {
+      if (decision.reason === "shared") {
+        return "主机授权保留（仍被其他 Provider 共用）";
+      }
+      return "";
+    }
+    return await removeGrantedHostPermission(decision.pattern);
   } catch (e) {
     return `主机授权回收失败：${String(e)}`;
   }
@@ -206,19 +216,41 @@ export function OptionsApp() {
 
   /** 同步发起 permissions.request：必须保持用户手势调用链，不经多层异步转发（04 §3.8.3） */
   const requestAndCommit = (config: ProviderConfig, pattern: string) => {
+    // 编辑场景的旧主机（保存前配置）；用于判断换主机后是否需要回收旧授权（04 §3.8.6）
+    const previous = providers.find((p) => p.id === config.id);
+    const previousCheck = previous ? checkBaseUrl(previous.baseUrl) : null;
+    const previousPattern =
+      previousCheck && previousCheck.ok ? previousCheck.originPattern : null;
+
     const onGranted = (granted: boolean) => {
       if (granted) {
         // 授权成功后持久化（02 §3.5：可信访问级别初始化在 saveProvider 内保证）
         saveProvider(config).then(
           () => {
-            setProviders((list) =>
-              list.some((p) => p.id === config.id)
-                ? list.map((p) => (p.id === config.id ? config : p))
-                : [...list, config],
-            );
+            const nextList = providers.some((p) => p.id === config.id)
+              ? providers.map((p) => (p.id === config.id ? config : p))
+              : [...providers, config];
+            setProviders(nextList);
             setDraft(null);
             setError(null);
             setStatus(`已保存并授权 ${pattern}`);
+            if (!previous || !previousPattern) return;
+            // 先保存后回收：保存失败则旧授权保持不动；残留由「清理未使用的主机授权」兜底
+            const decision = planHostPermissionChange(
+              previousPattern,
+              pattern,
+              nextList,
+            );
+            if (decision.action === "remove") {
+              void removeGrantedHostPermission(decision.pattern).then((note) => {
+                setStatus(`已保存并授权 ${pattern}；${note}`);
+                refreshOrphans(nextList);
+              });
+            } else if (decision.reason === "shared") {
+              setStatus(
+                `已保存并授权 ${pattern}；旧主机授权 ${previousPattern} 保留（仍被其他 Provider 共用）`,
+              );
+            }
           },
           (e) => setError(`保存失败：${String(e)}`),
         );

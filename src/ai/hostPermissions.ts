@@ -27,6 +27,23 @@ export function planHostPermissionCleanup(
     : { action: "remove", pattern: deletedPattern };
 }
 
+export type HostPermissionChangeDecision =
+  | HostPermissionDecision
+  | { action: "skip"; reason: "unchanged" };
+
+/** 编辑 Provider 更换主机后的回收决策（04 §3.8.6）：
+ *  remainingProviders 必须是“新配置已保存之后”的列表（编辑后的 Provider 已指向新主机），
+ *  旧主机是否仍被共用沿用删除路径同一套判断。 */
+export function planHostPermissionChange(
+  oldPattern: string | null,
+  newPattern: string,
+  remainingProviders: ProviderConfig[],
+): HostPermissionChangeDecision {
+  if (!oldPattern) return { action: "skip", reason: "no-pattern" };
+  if (oldPattern === newPattern) return { action: "skip", reason: "unchanged" };
+  return planHostPermissionCleanup(oldPattern, remainingProviders);
+}
+
 // 取 match pattern / origin 的主机（含端口）；含通配符的主机（https://* 等）返回 null
 export function patternHost(pattern: string): string | null {
   const stripped = pattern.replace(/\*+$/, "");

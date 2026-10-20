@@ -2,7 +2,7 @@
 
 - 状态：In Progress（2026-10-20 起按用户指示先落地独立扩展配置页与主机授权流程，Provider 持久化已接通 02 可信存储；模式清单及请求运行阈值仍待确认，见第 8 节，阻塞请求代理与 Agent UI；作图接线仍受 07 状态约束）
 - 关联阶段：Phase 3
-- 最后更新：2026-10-20
+- 最后更新：2026-10-21
 - 涉及代码目录：`src/ai/`（协议适配与请求契约）、`src/background/`（请求执行）、`src/options/`（独立扩展设置页）、`src/panel/agent/`（展示与命令客户端）
 
 ## 1. 目标（In Scope）
@@ -134,17 +134,23 @@
 
 ### 3.6 预置 Provider 快捷项
 
-| 预置名 | Protocol | Base URL | 示例 Model | 上下文窗口预填 |
-|---|---|---|---|---|
-| OpenAI | `openai-compatible` | `https://api.openai.com/v1` | `gpt-4o-mini` | 128K |
-| Anthropic | `anthropic`（原生协议，专用适配器） | `https://api.anthropic.com` | `claude-3-5-haiku-latest`（以官方当前为准） | 200K |
-| Gemini | `openai-compatible` | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.0-flash` | 1M |
-| DeepSeek | `openai-compatible` | `https://api.deepseek.com` | `deepseek-chat` | 64K |
-| GLM | `openai-compatible` | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 128K |
-| Kimi | `openai-compatible` | `https://api.moonshot.cn/v1` | `moonshot-v1-32k` | 32K |
-| Qwen | `openai-compatible` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 128K |
+方案 A（2026-10-21 用户确认）：每个服务一个预置按钮；点击时按表单**当前协议**填入对应端点与默认模型；服务没有该协议端点时回退到可用端点并自动切换协议。仅在官方文档可核实的默认模型/上下文窗口才预填，未核实项留空、填充时保留用户已填内容；价格一律留空。
 
-（URL/模型名为当前公开信息，实现时以官方文档为准；用户可改；其余自定义。）
+| 服务（按钮名） | OpenAI-compatible | Anthropic | 默认 Model（O / A） | 上下文窗口（O / A） |
+|---|---|---|---|---|
+| OpenCode Go | `https://opencode.ai/inference/go/openai/v1` | `https://opencode.ai/inference/go/anthropic/v1` | `kimi-k2.7-code` / `claude-haiku-5-5` | 262144 / — |
+| 百炼 Coding（国际站） | `https://coding-intl.dashscope.aliyuncs.com/v1` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | — | — |
+| GLM Coding Plan | `https://open.bigmodel.cn/api/coding/paas/v4` | `https://open.bigmodel.cn/api/anthropic` | `glm-5.3` | 1000000 |
+| Kimi Code | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding` | `kimi-k3` | 1000000 |
+| Command Code GOAT | `https://api.commandcode.ai/provider/v1` | 不支持 | — | — |
+| MiniMax Token Plan | `https://token-plan-cn.minimaxi.com/v1` | `https://token-plan-cn.minimaxi.com/anthropic` | `MiniMax-M3.1-Flash` | 524288 |
+| 小米 MiMo Token Plan | `https://token-plan-cn.xiaomimimo.com/v1` | `https://token-plan-cn.xiaomimimo.com/anthropic` | `MiMo-V2.6-Pro` | 1048576 |
+| 腾讯云 Coding Plan | `https://api.lkeap.cloud.tencent.com/plan/v3` | `https://api.lkeap.cloud.tencent.com/plan/anthropic` | — | — |
+| 火山引擎 Coding Plan | `https://ark.cn-beijing.volces.com/api/coding/v3` | `https://ark.cn-beijing.volces.com/api/coding/v1` | — | — |
+| DeepSeek API | `https://api.deepseek.com` | `https://api.deepseek.com/anthropic` | `deepseek-flash` | 1000000 |
+| OpenCode Zen | `https://opencode.ai/zen/v1` | 不支持 | — | — |
+
+（URL/模型名为 2026-10-21 官方文档核实值，实现时以官方文档为准；用户可改；其余自定义。“—”表示官方文档未核实：字段留空由用户填写，确认后可补入。原 OpenAI/Anthropic/Gemini/Qwen 通用预置按用户要求替换。）
 
 ### 3.7 Anthropic 原生适配器要点（方案 a，已确认）
 
@@ -283,7 +289,7 @@ interface ConversationMessage {
 - [ ] 回复流式渲染；失败不重试、提示词不消失、有 [重试] 与清晰原因。
 - [ ] 底栏模型下拉、上下文圆环（hover 明细）、资费显示、模式选择均可用。
 - [ ] 保存 Provider 触发方案 B 权限申请与连通性验证；拒绝有提醒与重试入口。
-- [ ] 预置七项快捷填入可用；Anthropic 走原生适配器可正常流式对话。
+- [ ] 预置快捷项按当前协议填入对应端点/默认模型可用（§3.6 方案 A）；Anthropic 走原生适配器可正常流式对话。
 - [ ] API Key 只发往用户配置的 Base URL。
 - [ ] 请求只在 Service Worker 执行；面板消息无 Key/任意 URL/认证头；校验发送者、文档、连接及命令字段，不存在通用 fetch 代理。
 - [ ] 独立扩展配置页由主面板入口打开；未添加 Provider 不申请其权限，拒绝不请求网络；变更/共用主机/删除/撤权/导入配置的权限语义正确。
@@ -306,6 +312,8 @@ interface ConversationMessage {
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-21 | 预置快捷项替换为 11 项常用 Coding Plan 服务（§3.6 方案 A：每服务一键、按当前协议选端点，缺端点回退并切换协议；默认模型/窗口仅在官方文档可核实时预填）。官方文档核实 OpenCode Go/Zen、GLM、Kimi、MiniMax、DeepSeek、CommandCode：修正 DeepSeek 已支持 Anthropic 端点（`https://api.deepseek.com/anthropic`，旧表记“不支持”过时）；移除与火山引擎重复的百炼 Token Plan（新加坡）行（用户确认）；百炼国际/腾讯/火山模型未核实留空。新增 `planPresetFill` 纯逻辑及用例（test:ai 93 用例） |
+| 2026-10-21 | 编辑 Provider 更换主机时自动回收旧主机不再共用的授权（§3.8.6）：保存成功后按 post-save 列表判断，旧主机仍被共用/为 leetcode.cn 基础权限/未变化时不回收；复用 `permissions.getAll()` 反查+回收后复查，结果显式反馈（失败可在状态栏与孤儿入口看见）；新增 `planHostPermissionChange` 纯逻辑及用例（test:ai 63 用例）。模式清单、请求阈值仍未解决（见第 8 节）；ProviderSummary 面板读取接口与连通性测试按用户指示随 P5/P2 落地 |
 | 2026-10-20 | 新增「清理未使用的主机授权」：配置页自动列出已授予但无 Provider 使用的站点（跳过 leetcode.cn 与通配），手动确认后回收并复查；回收状态栏显式反馈（禁止静默失败） |
 | 2026-10-20 | 权限回收改以 `permissions.getAll()` 反查实际授予 pattern + 回收后复查为准（Edge 实测 remove 返回值与浏览器 UI 表现可能不一致）；记录 Edge「站点访问权限」列表保留历史请求站点的行为差异；配置页接通 Provider 持久化（02 可信 local + 受控消息，含可信访问级别初始化）；首次保存提醒改为持久化只弹一次；删除 Provider 时清理不再共用的主机授权（§3.8.6）；上下文快照描述/约束抽取（§3.3）落地为 `problemContext`；模式清单、请求阈值仍未解决 |
 | 2026-10-20 | 用户指示开工：先做独立扩展配置页（入口/表单/预置七项/Base URL 规则/首次确认/主机授权流程），Provider 持久化依赖的 02 存储层按用户要求后置；状态 Draft → In Progress（模式清单、请求运行阈值仍未解决，阻塞后续部分） |
