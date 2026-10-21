@@ -73,7 +73,7 @@
 
 ### 3.4 费用与上下文展示
 
-- `ProviderConfig` 含 `contextWindow` / `priceInput` / `priceOutput` / `currency`；预置项预填 contextWindow，价格留空由用户填。
+- `ProviderConfig` 含 `contextWindow` / `priceInput` / `priceOutput` / `priceCacheInput` / `currency`；预置项预填 contextWindow，价格留空由用户填。缓存命中价格供 Provider 上报缓存 token 时计算费用（usage 未含缓存明细时按普通输入价计）。
 - 底栏圆环：`已用 tokens / contextWindow` 的环形进度；hover tooltip 显示 `prompt/completion tokens` 明细。
 - 每轮回复 footer 显示本轮费用与本次对话累计费用（`usage × 单价`）；usage 缺失时只显示 tokens。
 
@@ -134,7 +134,7 @@
 
 ### 3.6 预置 Provider 快捷项
 
-方案 A（2026-10-21 用户确认）：每个服务一个预置按钮；点击时按表单**当前协议**填入对应端点与默认模型；服务没有该协议端点时回退到可用端点并自动切换协议。仅在官方文档可核实的默认模型/上下文窗口才预填，未核实项留空、填充时保留用户已填内容；价格一律留空。
+方案 A（2026-10-21 用户确认）：每个服务一个预置按钮；点击时按表单**当前协议**填入对应端点与默认模型；服务没有该协议端点时回退到可用端点并自动切换协议。切换协议时，若当前 Base URL 命中某预置在旧协议下的端点，自动切到该服务新协议的端点；Model/窗口若仍是旧端点预置值则跟随切换（新端点未核实则清空待填），用户手动改过的值不动。仅在官方文档可核实的默认模型/上下文窗口才预填，未核实项留空、填充时保留用户已填内容；价格一律留空。
 
 | 服务（按钮名） | OpenAI-compatible | Anthropic | 默认 Model（O / A） | 上下文窗口（O / A） |
 |---|---|---|---|---|
@@ -222,6 +222,7 @@ interface ProviderConfig {
   contextWindow?: number;
   priceInput?: number;   // 每百万 tokens
   priceOutput?: number;
+  priceCacheInput?: number; // 每百万 tokens（缓存命中输入）
   currency?: "CNY" | "USD";
 }
 
@@ -275,7 +276,7 @@ interface ConversationMessage {
 - 历史入口 popover：该题对话列表（标题/更新时间/消息数）+ [新建对话]。
 - 模型选择下拉：已配置 Provider×Model 列表；圆环 hover 显示 tokens 明细。
 - 失败态：红色错误条 + 原因摘要 + [重试]；用户提示词保留可见。
-- 主面板设置/模型配置入口打开独立扩展配置页，输入凭据、保存授权与连接测试在该页完成；面板模型下拉只显示安全摘要。配置页使用同源主题 token，不在力扣页面 DOM 存放凭据表单。
+- 主面板设置/模型配置入口打开独立扩展配置页，输入凭据、保存授权与连接测试在该页完成；面板模型下拉只显示安全摘要。配置页使用同源主题 token，不在力扣页面 DOM 存放凭据表单。配置页表单区分必填（标签带 `*`）与「可选配置」分组：可选项不填也能保存，仅影响上下文占用与资费展示。
 
 ## 6. 依赖
 
@@ -312,6 +313,7 @@ interface ConversationMessage {
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-21 | 配置页表单改进：切换协议自动联动预置端点（Base URL 命中预置旧协议端点时切换；Model/窗口仅仍为预置值时跟随，新端点未核实则清空）；新增「缓存命中价格」`priceCacheInput`（§4，持久化校验同步）；表单区分必填（`*`）与「可选配置」分组；新增 `planProtocolSwitch` 纯逻辑及用例（test:ai 103 用例） |
 | 2026-10-21 | 预置快捷项替换为 11 项常用 Coding Plan 服务（§3.6 方案 A：每服务一键、按当前协议选端点，缺端点回退并切换协议；默认模型/窗口仅在官方文档可核实时预填）。官方文档核实 OpenCode Go/Zen、GLM、Kimi、MiniMax、DeepSeek、CommandCode：修正 DeepSeek 已支持 Anthropic 端点（`https://api.deepseek.com/anthropic`，旧表记“不支持”过时）；移除与火山引擎重复的百炼 Token Plan（新加坡）行（用户确认）；百炼国际/腾讯/火山模型未核实留空。新增 `planPresetFill` 纯逻辑及用例（test:ai 93 用例） |
 | 2026-10-21 | 编辑 Provider 更换主机时自动回收旧主机不再共用的授权（§3.8.6）：保存成功后按 post-save 列表判断，旧主机仍被共用/为 leetcode.cn 基础权限/未变化时不回收；复用 `permissions.getAll()` 反查+回收后复查，结果显式反馈（失败可在状态栏与孤儿入口看见）；新增 `planHostPermissionChange` 纯逻辑及用例（test:ai 63 用例）。模式清单、请求阈值仍未解决（见第 8 节）；ProviderSummary 面板读取接口与连通性测试按用户指示随 P5/P2 落地 |
 | 2026-10-20 | 新增「清理未使用的主机授权」：配置页自动列出已授予但无 Provider 使用的站点（跳过 leetcode.cn 与通配），手动确认后回收并复查；回收状态栏显式反馈（禁止静默失败） |

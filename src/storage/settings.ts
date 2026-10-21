@@ -288,6 +288,7 @@ function isProviderConfigValue(v: unknown): v is ProviderConfig {
     isOptionalNumber(p.contextWindow) &&
     isOptionalNumber(p.priceInput) &&
     isOptionalNumber(p.priceOutput) &&
+    isOptionalNumber(p.priceCacheInput) &&
     (p.currency === undefined || p.currency === "CNY" || p.currency === "USD")
   );
 }

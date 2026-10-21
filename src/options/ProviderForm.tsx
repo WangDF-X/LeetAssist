@@ -1,5 +1,10 @@
 import { checkBaseUrl } from "../ai/baseUrl";
-import { PROVIDER_PRESETS, planPresetFill, type ProviderPreset } from "../ai/presets";
+import {
+  PROVIDER_PRESETS,
+  planPresetFill,
+  planProtocolSwitch,
+  type ProviderPreset,
+} from "../ai/presets";
 import type { ProviderDraft } from "./providerDraft";
 import { useHostPermission } from "./useHostPermission";
 
@@ -39,6 +44,23 @@ export function ProviderForm({
     onChange(patch);
   };
 
+  /** 协议切换联动：Base URL 命中预置端点时自动切到新协议端点（04 §3.6） */
+  const onProtocolChange = (next: ProviderDraft["protocol"]) => {
+    const plan = planProtocolSwitch(
+      PROVIDER_PRESETS,
+      draft.protocol,
+      next,
+      draft.baseUrl,
+      draft.model,
+      draft.contextWindow,
+    );
+    const patch: Partial<ProviderDraft> = { protocol: next };
+    if (plan?.baseUrl !== undefined) patch.baseUrl = plan.baseUrl;
+    if (plan?.model !== undefined) patch.model = plan.model;
+    if (plan?.contextWindow !== undefined) patch.contextWindow = plan.contextWindow;
+    onChange(patch);
+  };
+
   return (
     <div className="oa-form">
       <div className="oa-presets">
@@ -57,7 +79,9 @@ export function ProviderForm({
 
       <div className="oa-grid">
         <div className="oa-field">
-          <label htmlFor="oa-name">名称</label>
+          <label htmlFor="oa-name">
+            名称<span className="oa-req">*</span>
+          </label>
           <input
             id="oa-name"
             value={draft.name}
@@ -66,12 +90,14 @@ export function ProviderForm({
           />
         </div>
         <div className="oa-field">
-          <label htmlFor="oa-protocol">协议</label>
+          <label htmlFor="oa-protocol">
+            协议<span className="oa-req">*</span>
+          </label>
           <select
             id="oa-protocol"
             value={draft.protocol}
             onChange={(e) =>
-              onChange({ protocol: e.target.value as ProviderDraft["protocol"] })
+              onProtocolChange(e.target.value as ProviderDraft["protocol"])
             }
           >
             <option value="openai-compatible">OpenAI-compatible</option>
@@ -80,7 +106,9 @@ export function ProviderForm({
         </div>
 
         <div className="oa-field" data-span="2">
-          <label htmlFor="oa-base">Base URL</label>
+          <label htmlFor="oa-base">
+            Base URL<span className="oa-req">*</span>
+          </label>
           <input
             id="oa-base"
             value={draft.baseUrl}
@@ -100,7 +128,9 @@ export function ProviderForm({
         </div>
 
         <div className="oa-field">
-          <label htmlFor="oa-model">Model</label>
+          <label htmlFor="oa-model">
+            Model<span className="oa-req">*</span>
+          </label>
           <input
             id="oa-model"
             value={draft.model}
@@ -110,7 +140,9 @@ export function ProviderForm({
           />
         </div>
         <div className="oa-field">
-          <label htmlFor="oa-key">API Key</label>
+          <label htmlFor="oa-key">
+            API Key<span className="oa-req">*</span>
+          </label>
           <input
             id="oa-key"
             type="password"
@@ -128,8 +160,12 @@ export function ProviderForm({
           </div>
         </div>
 
+        <div className="oa-group-head" data-span="2">
+          可选配置（不填也能保存）：仅影响底栏的上下文占用与费用展示
+        </div>
+
         <div className="oa-field">
-          <label htmlFor="oa-ctx">上下文窗口（tokens，可选）</label>
+          <label htmlFor="oa-ctx">上下文窗口（tokens）</label>
           <input
             id="oa-ctx"
             type="number"
@@ -153,7 +189,7 @@ export function ProviderForm({
           </select>
         </div>
         <div className="oa-field">
-          <label htmlFor="oa-price-in">输入价格（每百万 tokens，可选）</label>
+          <label htmlFor="oa-price-in">输入价格（每百万 tokens）</label>
           <input
             id="oa-price-in"
             type="number"
@@ -165,7 +201,7 @@ export function ProviderForm({
           />
         </div>
         <div className="oa-field">
-          <label htmlFor="oa-price-out">输出价格（每百万 tokens，可选）</label>
+          <label htmlFor="oa-price-out">输出价格（每百万 tokens）</label>
           <input
             id="oa-price-out"
             type="number"
@@ -174,6 +210,18 @@ export function ProviderForm({
             value={draft.priceOutput}
             placeholder="例如 2.00"
             onChange={(e) => onChange({ priceOutput: e.target.value })}
+          />
+        </div>
+        <div className="oa-field">
+          <label htmlFor="oa-price-cache">缓存命中价格（每百万 tokens）</label>
+          <input
+            id="oa-price-cache"
+            type="number"
+            min={0}
+            step="0.01"
+            value={draft.priceCacheInput}
+            placeholder="例如 0.10"
+            onChange={(e) => onChange({ priceCacheInput: e.target.value })}
           />
         </div>
 
