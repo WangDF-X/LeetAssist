@@ -139,7 +139,7 @@
 | 服务（按钮名） | OpenAI-compatible | Anthropic | 默认 Model（O / A） | 上下文窗口（O / A） |
 |---|---|---|---|---|
 | OpenCode Go | `https://opencode.ai/inference/go/openai/v1` | `https://opencode.ai/inference/go/anthropic/v1` | `kimi-k2.7-code` / `claude-haiku-5-5` | 262144 / — |
-| 百炼 Coding（国际站） | `https://coding-intl.dashscope.aliyuncs.com/v1` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic` | — | — |
+| 百炼 Coding Plan（国内） | `https://coding.dashscope.aliyuncs.com/v1` | `https://coding.dashscope.aliyuncs.com/apps/anthropic` | `qwen3.7-plus` | — |
 | GLM Coding Plan | `https://open.bigmodel.cn/api/coding/paas/v4` | `https://open.bigmodel.cn/api/anthropic` | `glm-5.3` | 1000000 |
 | Kimi Code | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding` | `kimi-k3` | 1000000 |
 | Command Code GOAT | `https://api.commandcode.ai/provider/v1` | 不支持 | — | — |
@@ -276,7 +276,7 @@ interface ConversationMessage {
 - 历史入口 popover：该题对话列表（标题/更新时间/消息数）+ [新建对话]。
 - 模型选择下拉：已配置 Provider×Model 列表；圆环 hover 显示 tokens 明细。
 - 失败态：红色错误条 + 原因摘要 + [重试]；用户提示词保留可见。
-- 主面板设置/模型配置入口打开独立扩展配置页，输入凭据、保存授权与连接测试在该页完成；面板模型下拉只显示安全摘要。配置页使用同源主题 token，不在力扣页面 DOM 存放凭据表单。配置页表单区分必填（标签带 `*`）与「可选配置」分组：可选项不填也能保存，仅影响上下文占用与资费展示。
+- 主面板设置/模型配置入口打开独立扩展配置页，输入凭据、保存授权与连接测试在该页完成；面板模型下拉只显示安全摘要。配置页使用同源主题 token，不在力扣页面 DOM 存放凭据表单。配置页表单区分必填（标签带 `*`）与「可选配置」分组：可选项不填也能保存，仅影响上下文占用与资费展示。视觉采用卡片化分区（Provider 列表、连接信息、可选配置）与页头主题徽标，跟随面板 themeMode 实时切换（含系统偏好），首屏预热避免深色闪白。
 
 ## 6. 依赖
 
@@ -313,6 +313,8 @@ interface ConversationMessage {
 
 | 日期 | 修改内容 |
 |---|---|
+| 2026-10-21 | 预置「百炼 Coding」改为国内站：OpenAI 兼容 `https://coding.dashscope.aliyuncs.com/v1`、Anthropic 兼容 `https://coding.dashscope.aliyuncs.com/apps/anthropic`，按官方文档预填 `qwen3.7-plus`（阿里云百炼 Coding Plan 文档） |
+| 2026-10-21 | 配置页视觉重做（纯 UI）：页头主题徽标、Provider 卡片化（首字母徽标/悬停反馈/操作区）、预置面板、连接信息与可选配置分区、按钮与表单态统一、窄窗口单列；主题跟随面板 themeMode 与系统偏好（`storage.onChanged`），`main.tsx` 首屏预热避免深色闪白；`theme.ts` 深浅成对新增 `--la-accent-soft` 聚焦光圈 token |
 | 2026-10-21 | 配置页表单改进：切换协议自动联动预置端点（Base URL 命中预置旧协议端点时切换；Model/窗口仅仍为预置值时跟随，新端点未核实则清空）；新增「缓存命中价格」`priceCacheInput`（§4，持久化校验同步）；表单区分必填（`*`）与「可选配置」分组；新增 `planProtocolSwitch` 纯逻辑及用例（test:ai 103 用例） |
 | 2026-10-21 | 预置快捷项替换为 11 项常用 Coding Plan 服务（§3.6 方案 A：每服务一键、按当前协议选端点，缺端点回退并切换协议；默认模型/窗口仅在官方文档可核实时预填）。官方文档核实 OpenCode Go/Zen、GLM、Kimi、MiniMax、DeepSeek、CommandCode：修正 DeepSeek 已支持 Anthropic 端点（`https://api.deepseek.com/anthropic`，旧表记“不支持”过时）；移除与火山引擎重复的百炼 Token Plan（新加坡）行（用户确认）；百炼国际/腾讯/火山模型未核实留空。新增 `planPresetFill` 纯逻辑及用例（test:ai 93 用例） |
 | 2026-10-21 | 编辑 Provider 更换主机时自动回收旧主机不再共用的授权（§3.8.6）：保存成功后按 post-save 列表判断，旧主机仍被共用/为 leetcode.cn 基础权限/未变化时不回收；复用 `permissions.getAll()` 反查+回收后复查，结果显式反馈（失败可在状态栏与孤儿入口看见）；新增 `planHostPermissionChange` 纯逻辑及用例（test:ai 63 用例）。模式清单、请求阈值仍未解决（见第 8 节）；ProviderSummary 面板读取接口与连通性测试按用户指示随 P5/P2 落地 |

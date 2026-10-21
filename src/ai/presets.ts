@@ -33,9 +33,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     },
   },
   {
-    name: "百炼 Coding（国际站）",
-    openai: { baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1" },
-    anthropic: { baseUrl: "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic" },
+    name: "百炼 Coding Plan（国内）",
+    openai: {
+      baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+      model: "qwen3.7-plus",
+    },
+    anthropic: {
+      baseUrl: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+      model: "qwen3.7-plus",
+    },
   },
   {
     name: "GLM Coding Plan",

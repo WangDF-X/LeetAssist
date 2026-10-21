@@ -10,27 +10,53 @@ body {
     "Microsoft YaHei", sans-serif;
   background: var(--la-bg);
   color: var(--la-text);
+  -webkit-font-smoothing: antialiased;
 }
 
 .oa-container {
-  max-width: 880px;
+  max-width: 920px;
   margin: 0 auto;
-  padding: 28px 20px 72px;
+  padding: 40px 24px 80px;
 }
 
-.oa-header h1 {
-  font-size: 20px;
-  margin: 0 0 4px;
+/* ---------- 页头 ---------- */
+
+.oa-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--la-border-soft);
 }
 
-.oa-header p {
+.oa-header-main h1 {
+  font-size: 22px;
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+
+.oa-header-main p {
   margin: 0;
   color: var(--la-text-dim);
   font-size: 13px;
+  line-height: 1.6;
+}
+
+.oa-theme-chip {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--la-text-dim);
+  background: var(--la-toolbar-bg);
+  border: 1px solid var(--la-border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  white-space: nowrap;
 }
 
 .oa-section {
-  margin-top: 24px;
+  margin-top: 28px;
 }
 
 .oa-section-head {
@@ -38,19 +64,27 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 }
 
 .oa-section-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 15px;
   margin: 0;
 }
 
-.oa-devnote {
+.oa-count {
+  font-size: 11px;
+  font-weight: 500;
   color: var(--la-text-faint);
-  font-size: 12px;
-  margin-bottom: 12px;
+  background: var(--la-toolbar-bg);
+  border-radius: 999px;
+  padding: 1px 8px;
 }
+
+/* ---------- 提示条 ---------- */
 
 .oa-orphans {
   display: flex;
@@ -62,9 +96,9 @@ body {
   color: var(--la-text);
   border-left: 3px solid var(--la-amber);
   background: var(--la-toolbar-bg);
-  padding: 8px 10px;
-  border-radius: 6px;
-  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 14px;
   word-break: break-all;
 }
 
@@ -73,14 +107,17 @@ body {
 }
 
 .oa-empty {
-  padding: 28px;
+  padding: 32px 24px;
   text-align: center;
   color: var(--la-text-dim);
   background: var(--la-surface);
   border: 1px dashed var(--la-border);
   border-radius: 12px;
   font-size: 13px;
+  line-height: 1.6;
 }
+
+/* ---------- Provider 列表 ---------- */
 
 .oa-list {
   display: flex;
@@ -91,11 +128,31 @@ body {
 .oa-card {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   background: var(--la-surface);
   border: 1px solid var(--la-border);
   border-radius: 12px;
   padding: 14px 16px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.oa-card:hover {
+  border-color: var(--la-accent);
+  box-shadow: var(--la-shadow-ear);
+}
+
+.oa-card-badge {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--la-toolbar-bg);
+  color: var(--la-accent);
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .oa-card-main {
@@ -118,6 +175,14 @@ body {
   word-break: break-all;
 }
 
+.oa-card-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* ---------- 徽标 ---------- */
+
 .oa-chip {
   font-size: 12px;
   font-weight: 400;
@@ -137,6 +202,8 @@ body {
   border-color: var(--la-amber);
 }
 
+/* ---------- 按钮 ---------- */
+
 .oa-btn {
   appearance: none;
   border: 1px solid var(--la-border);
@@ -145,22 +212,32 @@ body {
   border-radius: 8px;
   padding: 7px 14px;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+    color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .oa-btn:hover {
   background: var(--la-hover);
 }
 
+.oa-btn:active {
+  transform: translateY(1px);
+}
+
 .oa-btn[data-variant="primary"] {
   background: var(--la-accent);
   border-color: var(--la-accent);
   color: var(--la-on-accent);
+  font-weight: 600;
+  box-shadow: var(--la-shadow-ear);
 }
 
 .oa-btn[data-variant="primary"]:hover {
   background: var(--la-accent-strong);
+  border-color: var(--la-accent-strong);
 }
 
 .oa-btn[data-variant="danger"] {
@@ -178,24 +255,78 @@ body {
   outline-offset: 1px;
 }
 
+/* ---------- 表单 ---------- */
+
 .oa-form {
   background: var(--la-surface);
   border: 1px solid var(--la-border);
-  border-radius: 12px;
-  padding: 18px;
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: var(--la-shadow-ear);
 }
 
-.oa-presets {
+.oa-presets-panel {
+  background: var(--la-toolbar-bg);
+  border: 1px solid var(--la-border-soft);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 22px;
+}
+
+.oa-presets-head {
   display: flex;
+  align-items: baseline;
+  gap: 10px;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .oa-presets-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--la-text);
+}
+
+.oa-presets-note {
   font-size: 12px;
-  color: var(--la-text-dim);
+  color: var(--la-text-faint);
+}
+
+.oa-presets-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.oa-presets-chips .oa-btn {
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  background: var(--la-surface);
+}
+
+.oa-form-block + .oa-form-block {
+  margin-top: 24px;
+}
+
+.oa-block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--la-border-soft);
+}
+
+.oa-block-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.oa-block-note {
+  font-size: 12px;
+  color: var(--la-text-faint);
 }
 
 .oa-grid {
@@ -219,16 +350,6 @@ body {
   margin-left: 2px;
 }
 
-.oa-group-head {
-  grid-column: span 2;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--la-text-dim);
-  border-top: 1px solid var(--la-border-soft);
-  padding-top: 12px;
-  margin-top: 2px;
-}
-
 .oa-field > label {
   font-size: 12px;
   color: var(--la-text-dim);
@@ -240,58 +361,84 @@ body {
   border-radius: 8px;
   background: var(--la-bg);
   color: var(--la-text);
-  padding: 8px 10px;
+  padding: 9px 11px;
   font-size: 13px;
   font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.oa-field input:hover,
+.oa-field select:hover {
+  border-color: var(--la-text-faint);
 }
 
 .oa-field input:focus,
 .oa-field select:focus {
-  outline: 2px solid var(--la-accent);
-  outline-offset: 0;
+  outline: none;
   border-color: var(--la-accent);
+  box-shadow: 0 0 0 3px var(--la-accent-soft);
 }
 
 .oa-hint {
   font-size: 12px;
   color: var(--la-text-faint);
   word-break: break-all;
+  line-height: 1.5;
 }
 
 .oa-warn {
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: var(--la-text);
   border-left: 3px solid var(--la-amber);
   background: var(--la-toolbar-bg);
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.oa-error,
+.oa-status {
+  font-size: 13px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--la-toolbar-bg);
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .oa-error {
   color: var(--la-danger);
-  font-size: 13px;
-  margin-top: 12px;
+  border-left: 3px solid var(--la-danger);
 }
 
 .oa-status {
   color: var(--la-accent);
-  font-size: 13px;
-  margin-top: 12px;
+  border-left: 3px solid var(--la-accent);
 }
 
 .oa-perm-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 2px;
 }
 
 .oa-form-foot {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--la-border-soft);
 }
+
+.oa-form-foot .oa-btn {
+  min-width: 88px;
+}
+
+/* ---------- 弹窗 ---------- */
 
 .oa-modal-mask {
   position: fixed;
@@ -300,26 +447,30 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 24px;
   z-index: 10;
+  backdrop-filter: blur(2px);
 }
 
 .oa-modal {
   width: min(520px, calc(100vw - 48px));
   background: var(--la-surface);
   border: 1px solid var(--la-border);
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow: var(--la-shadow-pop);
-  padding: 18px;
+  padding: 20px;
 }
 
 .oa-modal-title {
+  font-size: 15px;
   font-weight: 600;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .oa-modal-body {
   font-size: 13px;
   line-height: 1.7;
+  color: var(--la-text);
 }
 
 .oa-modal-body p {
@@ -335,5 +486,50 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--la-border-soft);
+}
+
+/* ---------- 响应式 ---------- */
+
+@media (max-width: 720px) {
+  .oa-container {
+    padding: 24px 16px 56px;
+  }
+
+  .oa-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .oa-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .oa-field[data-span="2"] {
+    grid-column: span 1;
+  }
+
+  .oa-card {
+    flex-wrap: wrap;
+  }
+
+  .oa-card-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .oa-form {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oa-btn,
+  .oa-card,
+  .oa-field input,
+  .oa-field select {
+    transition: none;
+  }
 }
