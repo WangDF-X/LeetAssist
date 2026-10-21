@@ -9,7 +9,8 @@ import {
   planHostPermissionChange,
   planHostPermissionCleanup,
 } from "../src/ai/hostPermissions";
-import { PROVIDER_PRESETS, planPresetFill } from "../src/ai/presets";
+import { PROVIDER_PRESETS, planPresetFill, planProtocolSwitch } from "../src/ai/presets";
+import { buildConfig, draftFromConfig, emptyDraft } from "../src/options/providerDraft";
 import type { ProviderConfig } from "../src/ai/types";
 import { htmlToText, splitProblemContent } from "../src/ai/problemContext";
 import {
@@ -103,6 +104,141 @@ check(
   Boolean(dsPreset.anthropic) &&
     planPresetFill(dsPreset, "anthropic")?.baseUrl === "https://api.deepseek.com/anthropic",
 );
+
+// ---- 协议切换联动（04 §3.6 方案 A） ----
+
+const glmSwitch = planProtocolSwitch(
+  PROVIDER_PRESETS,
+  "openai-compatible",
+  "anthropic",
+  "https://open.bigmodel.cn/api/coding/paas/v4",
+  "glm-5.3",
+  "1000000",
+);
+check(
+  "协议联动：预置端点切到新协议端点",
+  glmSwitch !== null &&
+    glmSwitch.baseUrl === "https://open.bigmodel.cn/api/anthropic" &&
+    glmSwitch.model === "glm-5.3" &&
+    glmSwitch.contextWindow === "1000000",
+);
+
+const glmEditedModel = planProtocolSwitch(
+  PROVIDER_PRESETS,
+  "openai-compatible",
+  "anthropic",
+  "https://open.bigmodel.cn/api/coding/paas/v4/",
+  "my-custom-model",
+  "1000000",
+);
+check(
+  "协议联动：手动改过的模型不覆盖（URL 归一化命中）",
+  glmEditedModel !== null &&
+    glmEditedModel.baseUrl === "https://open.bigmodel.cn/api/anthropic" &&
+    glmEditedModel.model === undefined,
+);
+
+const goSwitch = planProtocolSwitch(
+  PROVIDER_PRESETS,
+  "openai-compatible",
+  "anthropic",
+  "https://opencode.ai/inference/go/openai/v1",
+  "kimi-k2.7-code",
+  "262144",
+);
+check(
+  "协议联动：新端点无窗口核实时清空窗口",
+  goSwitch !== null &&
+    goSwitch.baseUrl === "https://opencode.ai/inference/go/anthropic/v1" &&
+    goSwitch.model === "claude-haiku-5-5" &&
+    goSwitch.contextWindow === "",
+);
+
+check(
+  "协议联动：自定义 URL 不命中预置返回 null",
+  planProtocolSwitch(
+    PROVIDER_PRESETS,
+    "openai-compatible",
+    "anthropic",
+    "https://my-gateway.example/v1",
+    "m",
+    "",
+  ) === null,
+);
+check(
+  "协议联动：无 Anthropic 端点的服务返回 null",
+  planProtocolSwitch(
+    PROVIDER_PRESETS,
+    "openai-compatible",
+    "anthropic",
+    "https://api.commandcode.ai/provider/v1",
+    "",
+    "",
+  ) === null,
+);
+check(
+  "协议联动：同协议不处理",
+  planProtocolSwitch(
+    PROVIDER_PRESETS,
+    "openai-compatible",
+    "openai-compatible",
+    "https://open.bigmodel.cn/api/coding/paas/v4",
+    "glm-5.3",
+    "1000000",
+  ) === null,
+);
+
+// ---- Provider 草稿组装：缓存命中价格（04 §4） ----
+
+const draftBase = emptyDraft();
+const builtWithCache = buildConfig({
+  ...draftBase,
+  name: "t",
+  baseUrl: "https://api.example.com/v1",
+  model: "m",
+  apiKey: "k",
+  priceCacheInput: "0.10",
+});
+check(
+  "草稿组装：缓存命中价格解析",
+  builtWithCache.ok && builtWithCache.config.priceCacheInput === 0.1,
+);
+
+const builtCacheEmpty = buildConfig({
+  ...draftBase,
+  name: "t",
+  baseUrl: "https://api.example.com/v1",
+  model: "m",
+  apiKey: "k",
+});
+check(
+  "草稿组装：缓存命中价格留空为 undefined",
+  builtCacheEmpty.ok && builtCacheEmpty.config.priceCacheInput === undefined,
+);
+
+const builtCacheNeg = buildConfig({
+  ...draftBase,
+  name: "t",
+  baseUrl: "https://api.example.com/v1",
+  model: "m",
+  apiKey: "k",
+  priceCacheInput: "-1",
+});
+check(
+  "草稿组装：缓存命中价格拒绝负数",
+  !builtCacheNeg.ok && builtCacheNeg.error.includes("缓存命中价格"),
+);
+
+const roundTrip = draftFromConfig({
+  id: "x",
+  name: "n",
+  protocol: "openai-compatible",
+  baseUrl: "https://api.example.com/v1",
+  apiKey: "k",
+  model: "m",
+  priceCacheInput: 0.5,
+});
+check("草稿回填：缓存命中价格字符串化", roundTrip.priceCacheInput === "0.5");
 
 check(
   "originPatternOf 可直接复用",

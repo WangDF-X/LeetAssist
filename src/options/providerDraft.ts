@@ -12,6 +12,7 @@ export interface ProviderDraft {
   contextWindow: string;
   priceInput: string;
   priceOutput: string;
+  priceCacheInput: string;
   currency: AiCurrency;
 }
 
@@ -25,6 +26,7 @@ export function emptyDraft(): ProviderDraft {
     contextWindow: "",
     priceInput: "",
     priceOutput: "",
+    priceCacheInput: "",
     currency: "CNY",
   };
 }
@@ -40,6 +42,7 @@ export function draftFromConfig(p: ProviderConfig): ProviderDraft {
     contextWindow: p.contextWindow != null ? String(p.contextWindow) : "",
     priceInput: p.priceInput != null ? String(p.priceInput) : "",
     priceOutput: p.priceOutput != null ? String(p.priceOutput) : "",
+    priceCacheInput: p.priceCacheInput != null ? String(p.priceCacheInput) : "",
     currency: p.currency ?? "CNY",
   };
 }
@@ -77,6 +80,8 @@ export function buildConfig(d: ProviderDraft): BuildResult {
   if (!priceIn.ok) return priceIn;
   const priceOut = parseOptionalNumber(d.priceOutput, "输出价格");
   if (!priceOut.ok) return priceOut;
+  const priceCache = parseOptionalNumber(d.priceCacheInput, "缓存命中价格");
+  if (!priceCache.ok) return priceCache;
 
   return {
     ok: true,
@@ -91,6 +96,7 @@ export function buildConfig(d: ProviderDraft): BuildResult {
       contextWindow: ctx.value,
       priceInput: priceIn.value,
       priceOutput: priceOut.value,
+      priceCacheInput: priceCache.value,
       currency: d.currency,
     },
   };

@@ -2,6 +2,7 @@
 // 方案 A（2026-10-21 用户确认）：每个服务一个预置，按表单当前协议选择端点；
 // 服务缺少该协议端点时回退到可用端点并切换协议。
 // 默认模型/上下文窗口仅在官方文档可核实时预填（缺省项填充时保留用户已填内容）。
+import { checkBaseUrl } from "./baseUrl";
 import type { AiProtocol } from "./types";
 
 export interface ProviderPresetEndpoint {
@@ -143,4 +144,51 @@ export function planPresetFill(
     model: variant.model,
     contextWindow: variant.contextWindow,
   };
+}
+
+export interface ProtocolSwitchPlan {
+  baseUrl?: string;
+  model?: string;
+  /** 字符串形式，与表单草稿一致；空串表示清空待填 */
+  contextWindow?: string;
+}
+
+function sameBaseUrl(a: string, b: string): boolean {
+  const na = checkBaseUrl(a);
+  const nb = checkBaseUrl(b);
+  if (na.ok && nb.ok) return na.normalized === nb.normalized;
+  return a.trim() === b.trim();
+}
+
+/** 协议切换联动（04 §3.6 方案 A）：当前 Base URL 命中某预置旧协议端点时，
+ *  自动切到该服务新协议端点；Model/窗口仍是旧端点预置值时跟随切换，
+ *  新端点未核实则清空待填。自定义 URL 不命中任何预置则返回 null。 */
+export function planProtocolSwitch(
+  presets: ProviderPreset[],
+  from: AiProtocol,
+  to: AiProtocol,
+  currentBaseUrl: string,
+  currentModel: string,
+  currentContextWindow: string,
+): ProtocolSwitchPlan | null {
+  if (from === to) return null;
+  for (const preset of presets) {
+    const oldVariant = from === "anthropic" ? preset.anthropic : preset.openai;
+    const newVariant = to === "anthropic" ? preset.anthropic : preset.openai;
+    if (!oldVariant || !newVariant) continue;
+    if (!sameBaseUrl(currentBaseUrl, oldVariant.baseUrl)) continue;
+    const plan: ProtocolSwitchPlan = { baseUrl: newVariant.baseUrl };
+    if (oldVariant.model !== undefined && currentModel.trim() === oldVariant.model) {
+      plan.model = newVariant.model ?? "";
+    }
+    if (
+      oldVariant.contextWindow !== undefined &&
+      currentContextWindow.trim() === String(oldVariant.contextWindow)
+    ) {
+      plan.contextWindow =
+        newVariant.contextWindow !== undefined ? String(newVariant.contextWindow) : "";
+    }
+    return plan;
+  }
+  return null;
 }

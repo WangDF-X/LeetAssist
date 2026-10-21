@@ -214,6 +214,21 @@ body {
   grid-column: span 2;
 }
 
+.oa-req {
+  color: var(--la-danger);
+  margin-left: 2px;
+}
+
+.oa-group-head {
+  grid-column: span 2;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--la-text-dim);
+  border-top: 1px solid var(--la-border-soft);
+  padding-top: 12px;
+  margin-top: 2px;
+}
+
 .oa-field > label {
   font-size: 12px;
   color: var(--la-text-dim);

@@ -14,6 +14,7 @@ export interface ProviderConfig {
   contextWindow?: number;
   priceInput?: number; // 每百万 tokens
   priceOutput?: number;
+  priceCacheInput?: number; // 每百万 tokens（缓存命中输入）
   currency?: AiCurrency;
 }
 
