@@ -19,6 +19,7 @@ const LIGHT_VARS = `
   --la-hover: #dde3ea;
   --la-accent: #22a7f0;
   --la-accent-strong: #1b95d9;
+  --la-accent-soft: rgba(34, 167, 240, 0.18);
   --la-on-accent: #ffffff;
   --la-violet: #8b5cf6;
   --la-amber: #fbbf24;
@@ -43,6 +44,7 @@ const DARK_VARS = `
   --la-hover: #31353f;
   --la-accent: #22a7f0;
   --la-accent-strong: #3cb5f5;
+  --la-accent-soft: rgba(34, 167, 240, 0.28);
   --la-on-accent: #ffffff;
   --la-violet: #8b5cf6;
   --la-amber: #fbbf24;

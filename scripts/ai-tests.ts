@@ -105,6 +105,15 @@ check(
     planPresetFill(dsPreset, "anthropic")?.baseUrl === "https://api.deepseek.com/anthropic",
 );
 
+const bailianPreset = PROVIDER_PRESETS.find((p) => p.name === "百炼 Coding Plan（国内）")!;
+check(
+  "预置：百炼 Coding 使用国内站端点",
+  bailianPreset.openai?.baseUrl === "https://coding.dashscope.aliyuncs.com/v1" &&
+    bailianPreset.anthropic?.baseUrl ===
+      "https://coding.dashscope.aliyuncs.com/apps/anthropic" &&
+    bailianPreset.openai?.model === "qwen3.7-plus",
+);
+
 // ---- 协议切换联动（04 §3.6 方案 A） ----
 
 const glmSwitch = planProtocolSwitch(

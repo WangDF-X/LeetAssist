@@ -12,7 +12,7 @@ import {
   planHostPermissionCleanup,
 } from "../ai/hostPermissions";
 import type { ProviderConfig } from "../ai/types";
-import { resolveTheme, type ThemeMode } from "../panel/theme";
+import { THEME_MODE_LABEL, resolveTheme, type ThemeMode } from "../panel/theme";
 import {
   deleteProvider,
   isKeyNoticeConfirmed,
@@ -31,7 +31,7 @@ import {
 import { useHostPermission } from "./useHostPermission";
 
 /** 主题：跟随面板 themeMode（storage.local）+ 系统偏好（01 §3.7） */
-function useResolvedTheme(): void {
+function useResolvedTheme(): { mode: ThemeMode; resolved: "light" | "dark" } {
   const [mode, setMode] = useState<ThemeMode>("system");
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia("(prefers-color-scheme: dark)").matches,
@@ -54,11 +54,12 @@ function useResolvedTheme(): void {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
+  const resolved = resolveTheme(mode, systemDark);
   useEffect(() => {
-    const resolved = resolveTheme(mode, systemDark);
     document.documentElement.dataset.theme = resolved;
     document.documentElement.style.colorScheme = resolved;
-  }, [mode, systemDark]);
+  }, [resolved]);
+  return { mode, resolved };
 }
 
 type DialogState =
@@ -146,7 +147,7 @@ async function cleanupOrphanPermissions(hosts: string[]): Promise<string> {
 }
 
 export function OptionsApp() {
-  useResolvedTheme();
+  const theme = useResolvedTheme();
   // Provider 列表与首次提醒标记来自可信存储（02 §3.5–3.6）
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [noticeConfirmed, setNoticeConfirmed] = useState(false);
@@ -325,13 +326,26 @@ export function OptionsApp() {
   return (
     <div className="oa-container">
       <header className="oa-header">
-        <h1>LeetAssist 设置</h1>
-        <p>BYOK：Provider 与 API Key 只保存在本浏览器扩展本地存储，无云端同步。</p>
+        <div className="oa-header-main">
+          <h1>LeetAssist 设置</h1>
+          <p>BYOK：Provider 与 API Key 只保存在本浏览器扩展本地存储，无云端同步。</p>
+        </div>
+        <span className="oa-theme-chip" title="跟随主面板的主题设置">
+          主题：
+          {theme.mode === "system"
+            ? `跟随系统 · ${theme.resolved === "dark" ? "深色" : "浅色"}`
+            : THEME_MODE_LABEL[theme.mode]}
+        </span>
       </header>
 
       <section className="oa-section">
         <div className="oa-section-head">
-          <h2>AI Provider</h2>
+          <h2>
+            AI Provider
+            {providers.length > 0 && (
+              <span className="oa-count">{providers.length}</span>
+            )}
+          </h2>
           {!draft && (
             <button className="oa-btn" data-variant="primary" onClick={startAdd}>
               添加 Provider
@@ -464,6 +478,9 @@ function ProviderRow({
   const granted = useHostPermission(pattern);
   return (
     <div className="oa-card">
+      <div className="oa-card-badge" aria-hidden="true">
+        {provider.name.trim().slice(0, 1).toUpperCase()}
+      </div>
       <div className="oa-card-main">
         <div className="oa-card-title">
           <span>{provider.name}</span>
@@ -478,12 +495,14 @@ function ProviderRow({
           {provider.model} · {pattern ?? provider.baseUrl}
         </div>
       </div>
-      <button className="oa-btn" onClick={onEdit}>
-        编辑
-      </button>
-      <button className="oa-btn" data-variant="danger" onClick={onDelete}>
-        删除
-      </button>
+      <div className="oa-card-actions">
+        <button className="oa-btn" onClick={onEdit}>
+          编辑
+        </button>
+        <button className="oa-btn" data-variant="danger" onClick={onDelete}>
+          删除
+        </button>
+      </div>
     </div>
   );
 }
